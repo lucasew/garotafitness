@@ -2,7 +2,7 @@
 package magic2
 
 import (
-	"fmt"
+	"errors"
 	"io"
 )
 
@@ -21,7 +21,7 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	}
 	var tag [4]byte
 	if _, err := io.ReadFull(r, tag[:]); err != nil {
-		return nil, fmt.Errorf("magic2: %w", err)
+		return nil, err
 	}
 	if string(tag[:]) != lolzTag {
 		return nil, errMagic
@@ -29,12 +29,8 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	return nil, errPEOnly
 }
 
-type errString string
-
-func (e errString) Error() string { return string(e) }
-
-const (
-	errNil    = errString("magic2: nil reader")
-	errMagic  = errString("magic2: bad magic")
-	errPEOnly = errString("magic2: lolz v22c4b decoder is PE-only; no non-PE source")
+var (
+	errNil    = errors.New("magic2: nil reader")
+	errMagic  = errors.New("magic2: bad magic")
+	errPEOnly = errors.New("magic2: lolz v22c4b decoder is PE-only; no non-PE source")
 )

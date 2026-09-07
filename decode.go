@@ -3,6 +3,8 @@ package garotafitness
 import (
 	"io"
 
+	"github.com/lucasew/garotafitness/delta"
+	"github.com/lucasew/garotafitness/fourx4"
 	"github.com/lucasew/garotafitness/magic2"
 	"github.com/lucasew/garotafitness/mpzz"
 	"github.com/lucasew/garotafitness/rzw"
@@ -25,7 +27,15 @@ func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
 		return magic2.NewReader(r)
 	case AlgoRZW:
 		return rzw.NewReader(r)
+	case AlgoDelta:
+		return delta.NewReader(r)
+	case Algo4x4:
+		return fourx4.NewReader(r, a.Params, decodeInner)
 	default:
 		return nil, unknownEncoderError(a)
 	}
+}
+
+func decodeInner(r io.Reader, name, params string) (io.ReadCloser, error) {
+	return Decode(r, Atom{Algo: ParseAlgo(name), Params: params})
 }
