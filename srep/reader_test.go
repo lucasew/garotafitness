@@ -2,7 +2,7 @@ package srep
 
 import (
 	"bytes"
-	"errors"
+	"encoding/binary"
 	"io"
 	"os"
 	"testing"
@@ -24,16 +24,31 @@ func TestNewReader(t *testing.T) {
 		t.Fatal("want header error")
 	}
 	r, err := NewReader(bytes.NewReader(futureLZHead))
-	if errors.Is(err, errWASI) {
-		if r != nil {
-			t.Fatal("want nil reader")
-		}
-		return
-	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { r.Close() })
+	n, err := r.Read(make([]byte, 8))
+	if n != 0 || err != io.EOF {
+		t.Fatalf("empty solid: n=%d err=%v", n, err)
+	}
+}
+
+func TestNewReaderLiterals(t *testing.T) {
+	t.Parallel()
+	plain := []byte("hello")
+	r, err := NewReader(bytes.NewReader(literalSolid(plain)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { r.Close() })
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Fatalf("got %q want %q", got, plain)
+	}
 }
 
 func TestNewReaderCorpus(t *testing.T) {
@@ -47,14 +62,27 @@ func TestNewReaderCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := NewReader(f)
-	if errors.Is(err, errWASI) {
-		if r != nil {
-			t.Fatal("want nil reader")
-		}
-		return
-	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { r.Close() })
+	buf := make([]byte, 5)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		t.Fatal(err)
+	}
+	if string(buf) != "OGGRE" {
+		t.Fatalf("inner magic %q", buf)
+	}
+}
+
+func literalSolid(plain []byte) []byte {
+	var b bytes.Buffer
+	b.Write(futureLZHead)
+	var hdr [12]byte
+	binary.LittleEndian.PutUint32(hdr[0:4], uint32(len(plain)))
+	binary.LittleEndian.PutUint32(hdr[4:8], uint32(len(plain)))
+	b.Write(hdr[:])
+	b.Write(make([]byte, 16))
+	b.Write(plain)
+	return b.Bytes()
 }

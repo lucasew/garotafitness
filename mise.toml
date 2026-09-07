@@ -1,11 +1,14 @@
 # Warning: Do not unify this file with others. Keep tool definitions localized.
 #
 # Compilers and C/C++ build tools use the mise conda backend (conda:make,
-# conda:gxx, later wasi-sdk). Do not use host g++, nix shell, or registry clang.
+# conda:gxx, conda:clang, conda:emscripten). Do not use host g++, nix shell,
+# or registry clang. WASM guests use conda:emscripten (same pin as gameweb).
 [tools]
 go = "1.26.1"
 "conda:make" = "4.4.1"
 "conda:gxx" = "16.2.0"
+"conda:clang" = "23.1.0"
+"conda:emscripten" = { version = "4.0.9", channel = "conda-forge" }
 
 [tasks."install:tidy"]
 description = "Tidy go.mod and go.sum"
@@ -38,6 +41,10 @@ run = "go test -count=1 ./..."
 [tasks.test]
 description = "Run all tests"
 depends = ["test:*"]
+
+[tasks."build:srep"]
+description = "Build SREP guest wasm with conda emscripten"
+run = "make -C srep"
 
 [tasks."build:garotafitness"]
 description = "Build garotafitness into bin/"

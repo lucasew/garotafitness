@@ -1,27 +1,274 @@
 package srep
 
 import (
+	"bytes"
+	"context"
+	_ "embed"
+	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"sync"
+	"sync/atomic"
+
+	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
-// Blocked: v3 Future-LZ is not a wasm32-wasip1 Guest. Official srep.cpp
-// includes MultiThreading.cpp (pthread_create, -lpthread). The v3 path
-// file_seek()s the output and may fopen() srep-virtual-memory.tmp.
-// WASI preview1 has no pthreads; wazero does not implement wasi-threads.
+//go:embed srepdec.wasm
+var guestWASM []byte
+
+const maxBlock = 8 << 20
 
 var (
-	errWASI = errors.New("srep: v3 Future-LZ needs pthreads and a seekable tempfile; wasm32-wasip1/wazero provide neither")
-	errNil  = errors.New("srep: nil reader")
+	errNil      = errors.New("srep: nil reader")
+	errClosed   = errors.New("srep: closed")
+	errTooLarge = errors.New("srep: block too large")
+	errBroken   = errors.New("srep: broken block")
+	errGuest    = errors.New("srep: guest")
+	instID      atomic.Uint64
 )
 
-// NewReader wraps an official SREP stream as compress/gzip does.
+type engine struct {
+	rt       wazero.Runtime
+	compiled wazero.CompiledModule
+}
+
+var loadEngine = sync.OnceValues(func() (*engine, error) {
+	ctx := context.Background()
+	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
+	if _, err := instantiateEnv(ctx, rt); err != nil {
+		rt.Close(ctx)
+		return nil, fmt.Errorf("srep: env: %w", err)
+	}
+	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
+	compiled, err := rt.CompileModule(ctx, guestWASM)
+	if err != nil {
+		rt.Close(ctx)
+		return nil, fmt.Errorf("srep: compile guest: %w", err)
+	}
+	return &engine{rt: rt, compiled: compiled}, nil
+})
+
+func instantiateEnv(ctx context.Context, rt wazero.Runtime) (api.Closer, error) {
+	return rt.NewHostModuleBuilder("env").
+		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
+		NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat").
+		NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir").
+		Instantiate(ctx)
+}
+
+// NewReader wraps an official SREP v3 stream as compress/gzip does.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	if _, err := ParseHeader(r); err != nil {
+	h, err := ParseHeader(r)
+	if err != nil {
 		return nil, err
 	}
-	return nil, errWASI
+	if h.Format != FormatFutureLZ {
+		return nil, fmt.Errorf("srep: format %d", h.Format)
+	}
+	if h.Seed > 0 {
+		if _, err := io.CopyN(io.Discard, r, int64(h.Seed)); err != nil {
+			return nil, fmt.Errorf("srep: seed: %w", err)
+		}
+	}
+	eng, err := loadEngine()
+	if err != nil {
+		return nil, err
+	}
+	ctx := context.Background()
+	mod, err := eng.rt.InstantiateModule(ctx, eng.compiled, wazero.NewModuleConfig().
+		WithName(fmt.Sprintf("srep-%d", instID.Add(1))).
+		WithStartFunctions("_initialize").
+		WithStdout(io.Discard).
+		WithStderr(io.Discard))
+	if err != nil {
+		return nil, fmt.Errorf("srep: instantiate: %w", err)
+	}
+	open := mod.ExportedFunction("srep_open")
+	rd := &reader{
+		src:    r,
+		hdr:    h,
+		ctx:    ctx,
+		mod:    mod,
+		mem:    mod.Memory(),
+		block:  mod.ExportedFunction("srep_block"),
+		cls:    mod.ExportedFunction("srep_close"),
+		malloc: mod.ExportedFunction("malloc"),
+		free:   mod.ExportedFunction("free"),
+	}
+	if rd.mem == nil || open == nil || rd.block == nil || rd.cls == nil || rd.malloc == nil || rd.free == nil {
+		mod.Close(ctx)
+		return nil, errGuest
+	}
+	if _, err := open.Call(ctx, uint64(h.BaseLen)); err != nil {
+		mod.Close(ctx)
+		return nil, fmt.Errorf("srep: open: %w", err)
+	}
+	return rd, nil
+}
+
+type reader struct {
+	src    io.Reader
+	hdr    Header
+	ctx    context.Context
+	mod    api.Module
+	mem    api.Memory
+	block  api.Function
+	cls    api.Function
+	malloc api.Function
+	free   api.Function
+	buf    []byte
+	off    int
+	start  uint64
+	err    error
+	eof    bool
+}
+
+func (r *reader) Read(p []byte) (int, error) {
+	if r.err != nil && r.off >= len(r.buf) {
+		return 0, r.err
+	}
+	for r.off >= len(r.buf) {
+		if r.eof {
+			return 0, io.EOF
+		}
+		block, err := r.next()
+		if err == io.EOF {
+			r.eof = true
+			return 0, io.EOF
+		}
+		if err != nil {
+			r.err = err
+			return 0, err
+		}
+		r.buf = block
+		r.off = 0
+	}
+	n := copy(p, r.buf[r.off:])
+	r.off += n
+	return n, nil
+}
+
+func (r *reader) Close() error {
+	if r.mod == nil {
+		return nil
+	}
+	if r.cls != nil {
+		_, _ = r.cls.Call(r.ctx)
+	}
+	err := r.mod.Close(r.ctx)
+	r.mod = nil
+	r.err = errClosed
+	r.buf = nil
+	return err
+}
+
+func (r *reader) next() ([]byte, error) {
+	hdrSize := 12 + r.hdr.hashLen()
+	hdr := make([]byte, hdrSize)
+	n, err := io.ReadFull(r.src, hdr)
+	if n == 0 && (err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF)) {
+		return nil, io.EOF
+	}
+	if err != nil {
+		return nil, fmt.Errorf("srep: block header: %w", err)
+	}
+	dataSize := binary.LittleEndian.Uint32(hdr[0:4])
+	origSize := binary.LittleEndian.Uint32(hdr[4:8])
+	statSize := binary.LittleEndian.Uint32(hdr[8:12])
+	if dataSize == 0 && origSize == 0 {
+		return nil, io.EOF
+	}
+	if origSize > maxBlock || dataSize > maxBlock || statSize > maxBlock {
+		return nil, errTooLarge
+	}
+	stat := make([]byte, statSize)
+	if statSize > 0 {
+		if _, err := io.ReadFull(r.src, stat); err != nil {
+			return nil, fmt.Errorf("srep: stat: %w", err)
+		}
+	}
+	lits := make([]byte, dataSize)
+	if dataSize > 0 {
+		if _, err := io.ReadFull(r.src, lits); err != nil {
+			return nil, fmt.Errorf("srep: lits: %w", err)
+		}
+	}
+	out, err := r.decode(stat, lits, origSize)
+	if err != nil {
+		return nil, err
+	}
+	r.start += uint64(origSize)
+	return out, nil
+}
+
+func (r *reader) decode(stat, lits []byte, orig uint32) ([]byte, error) {
+	statPtr, err := r.alloc(uint32(len(stat)))
+	if err != nil {
+		return nil, err
+	}
+	defer r.drop(statPtr)
+	litPtr, err := r.alloc(uint32(len(lits)))
+	if err != nil {
+		return nil, err
+	}
+	defer r.drop(litPtr)
+	outPtr, err := r.alloc(orig)
+	if err != nil {
+		return nil, err
+	}
+	defer r.drop(outPtr)
+	if len(stat) > 0 && !r.mem.Write(statPtr, stat) {
+		return nil, errGuest
+	}
+	if len(lits) > 0 && !r.mem.Write(litPtr, lits) {
+		return nil, errGuest
+	}
+	res, err := r.block.Call(r.ctx,
+		uint64(statPtr), uint64(len(stat)),
+		uint64(litPtr), uint64(len(lits)),
+		uint64(outPtr), uint64(orig),
+		r.start)
+	if err != nil {
+		return nil, fmt.Errorf("srep: block: %w", err)
+	}
+	if res[0] != 0 {
+		return nil, errBroken
+	}
+	out, ok := r.mem.Read(outPtr, orig)
+	if !ok {
+		return nil, errGuest
+	}
+	return bytes.Clone(out), nil
+}
+
+func (r *reader) alloc(n uint32) (uint32, error) {
+	if n == 0 {
+		return 0, nil
+	}
+	res, err := r.malloc.Call(r.ctx, uint64(n))
+	if err != nil {
+		return 0, fmt.Errorf("srep: malloc: %w", err)
+	}
+	ptr := uint32(res[0])
+	if ptr == 0 {
+		return 0, errGuest
+	}
+	return ptr, nil
+}
+
+func (r *reader) drop(ptr uint32) {
+	if ptr == 0 {
+		return
+	}
+	_, _ = r.free.Call(r.ctx, uint64(ptr))
+}
+
+func (h Header) hashLen() int {
+	return int(h.HashExtra+16) & 255
 }

@@ -24,7 +24,7 @@ Non-goals:
 7. Pack, list, or ship a GUI.
 8. Apply installer side effects (registry, hosts file, wallpaper, music).
 
-Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compilers, make, and wasi-sdk come from the mise `conda:` backend. Host `g++`, nix shells, and registry clang are not the toolchain.
+Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compilers, make, and emscripten come from the mise `conda:` backend. Host `g++`, nix shells, and registry clang are not the toolchain.
 
 ## Technique
 
@@ -51,7 +51,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | TEC-05 SREP | FreeArc / Intensity SREP compiled as a Guest | wrap | spawn `srep` | Intensity/srep ; mirror/freearc Compression/SREP |
 | TEC-05 storing | identity `io.Reader` | implement | a Guest for uncompressed | stdlib:io |
 | TEC-06 | `xredor/unarc` compiled as a Guest | wrap | write an ArC parser | github.com/xredor/unarc |
-| TEC-07 | wazero plus wasi-sdk | adopt | cgo, wasmtime, a subprocess | github.com/tetratelabs/wazero ; WebAssembly/wasi-sdk |
+| TEC-07 | wazero plus conda emscripten | adopt | cgo, wasmtime, a subprocess | github.com/tetratelabs/wazero ; conda-forge:emscripten |
 | TEC-08 | `path/filepath` clean plus prefix check | adopt | write after a `..` escape | stdlib:path/filepath |
 | TEC-03 MD5 | `crypto/md5` when `MD5/fitgirl-bins.md5` exists | adopt | skip a present checksum file | stdlib:crypto/md5 |
 
@@ -61,7 +61,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | Runtime | wazero | D | TEC-07 | |
 | Persistence | none | D | CLI does not store | |
 | UI | none | D | slog is the output | |
-| Packaging | mise. `conda:` for make, g++, wasi-sdk | C | TEC-07 | mise.toml |
+| Packaging | mise. `conda:` for make, g++, emscripten | C | TEC-07 | mise.toml |
 | Identity | none | D | no accounts | |
 | Host OS | Linux | D | first-class host | |
 
@@ -213,3 +213,4 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - ADR-0003: `setup.exe` is signal data. Rejected execution of installer DLLs.
 - ADR-0004: Compilers come from mise `conda:`. Rejected nix, host g++, registry clang.
 - ADR-0005: One Algo package at module root. Agents do not edit the Decode switch.
+- ADR-0006: SREP v3 Future-LZ stays C++; Go owns the block loop. Guest is emscripten wasm. Go port later.
