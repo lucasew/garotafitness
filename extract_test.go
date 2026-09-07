@@ -1,6 +1,7 @@
 package garotafitness
 
 import (
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,26 @@ func TestExtractStackedStoring(t *testing.T) {
 	}
 	if string(got) != "hello" {
 		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExtractCRCMismatch(t *testing.T) {
+	t.Parallel()
+	d, err := OpenDirDest(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("hello")
+	s := solid{
+		pipe: ParsePipeline("storing"),
+		off:  0,
+		csz:  5,
+		files: []Member{
+			{Path: "a.txt", Size: 5, CRC: crc32.ChecksumIEEE(data) ^ 1, Pipeline: ParsePipeline("storing")},
+		},
+	}
+	if err := extractSolid(Extractor{Dest: d}, data, s); err == nil || !strings.Contains(err.Error(), "crc") {
+		t.Fatalf("got %v", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -179,9 +180,20 @@ func writeMember(dst Dest, m Member, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(w, r); err != nil {
+	h := crc32.NewIEEE()
+	n, err := io.Copy(w, io.TeeReader(r, h))
+	if err != nil {
 		w.Close()
 		return fmt.Errorf("write %s: %w", m.Path, err)
 	}
-	return w.Close()
+	if err := w.Close(); err != nil {
+		return err
+	}
+	if uint64(n) != m.Size {
+		return fmt.Errorf("write %s: size %d want %d", m.Path, n, m.Size)
+	}
+	if m.CRC != 0 && h.Sum32() != m.CRC {
+		return fmt.Errorf("write %s: crc %08x want %08x", m.Path, h.Sum32(), m.CRC)
+	}
+	return nil
 }
