@@ -38,6 +38,26 @@ func TestGetBitState(t *testing.T) {
 	}
 }
 
+func TestGetNibble9Sentinel(t *testing.T) {
+	t.Parallel()
+	var cdf [16]uint16
+	initNibbleCDF(cdf[:])
+	// slot just below cdf[2]=0x1000 → symbol 1, bsf 2
+	r := &rANS{x: 0x8000 | 0x0fff}
+	sym, bsf, err := r.getNibble9(cdf[:])
+	if err != nil || sym != 1 || bsf != 2 {
+		t.Fatalf("sym %d bsf %d err %v", sym, bsf, err)
+	}
+	// slot above cdf[8]=0x4000 (and below 0x8000) → sentinel bsf 9, sym 8
+	var cdf2 [16]uint16
+	initNibbleCDF(cdf2[:])
+	r = &rANS{x: 0x8000 | 0x7fff}
+	sym, bsf, err = r.getNibble9(cdf2[:])
+	if err != nil || sym != 8 || bsf != 9 {
+		t.Fatalf("sentinel sym %d bsf %d err %v cdf8=%#x cdf9=%#x", sym, bsf, err, cdf2[8], cdf2[9])
+	}
+}
+
 func TestGetNibbleFind(t *testing.T) {
 	t.Parallel()
 	var cdf [16]uint16

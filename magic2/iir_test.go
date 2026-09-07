@@ -35,6 +35,29 @@ func TestExtraSampleZero(t *testing.T) {
 	if err != nil || a != 0 || b != 0 {
 		t.Fatalf("bsf1 %d %d %v", a, b, err)
 	}
+	if st.off != 0 {
+		t.Fatalf("bsf1 consumed input %d", st.off)
+	}
+}
+
+func TestExtraBitOff(t *testing.T) {
+	t.Parallel()
+	// h1=0, sym-1=0, level 0, rdx 0 → 0
+	if extraBitOff(0, 0, 0, 0) != 0 {
+		t.Fatal("zero")
+	}
+	// h1=1 is +2048 bytes = +1024 u16
+	if extraBitOff(1, 0, 0, 0) != 1024 {
+		t.Fatalf("h1 %d", extraBitOff(1, 0, 0, 0))
+	}
+	// (sym-1)<<8 bytes = 128 u16
+	if extraBitOff(0, 1, 0, 0) != 128 {
+		t.Fatalf("sym %d", extraBitOff(0, 1, 0, 0))
+	}
+	// level*32 + 8*rdx bytes
+	if extraBitOff(0, 0, 1, 3) != (32+24)/2 {
+		t.Fatalf("walk %d", extraBitOff(0, 0, 1, 3))
+	}
 }
 
 func TestIIRRowMoves(t *testing.T) {

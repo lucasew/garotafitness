@@ -9,11 +9,12 @@ package magic2
 // After a nibble, 0x14001b15f mixes a packed (r10, r13<<32) sample
 // into the qword at +0x20 (w20,w24):
 //
-//	abs32 each dword, por 1, paddd old twice, psrld 1, keep low byte
-//	store at +0x18
+//	ones-complement if neg, por {1,1,1,1} at 0x14000a3e0,
+//	paddd old twice, psrld 1, keep low byte, store at +0x18.
 //
-// The caller is assumed to shift +0x18 into the longer history
-// (w08←w10←w18, w0c←w14←w1c) and copy +0x18 onto +0x20.
+// Callee never writes +0x20. Caller 3-stage shift of the packed
+// qwords: w08←w10←w20←(+0x18). applySample does that by using
+// +0x18 as the temp and copying it onto +0x20.
 
 const nibbleRows = 9 * 9
 
@@ -83,23 +84,36 @@ func (h *iirHist) cdf(grid []uint16) []uint16 {
 	return grid[r*16 : r*16+16]
 }
 
-// extraBits is the pair of unary-expanded integers built at
-// 0x14001af1b..0x14001b14f. After the 16-sym nibble:
+// extraBits is the depth-2 FCM tree at 0x14001af1b..0x14001b14f.
+// After the 9-sym nibble (add r12d, 0x200 + bsf):
 //
 //	bsf==1 (sym 0): r10=r13=0, skip the loop
-//	else iterations = bsf-1 = sym; each round
-//	    r10 = r10*2 + bit0
-//	    r13 = r13*2 + bit1
+//	else base = (h1<<11) + ((sym-1)<<8)
+//	     rdx = 0
+//	     for i := 0; i < sym; i++ {
+//	         p0 = base + i*32 + 8*rdx
+//	         bit0 = getBit(p0)
+//	         bit1 = getBit(p0 + 2 + 2*bit0)
+//	         r10 = r10*2 + bit0
+//	         r13 = r13*2 + bit1
+//	         rdx = bit1 + 2*bit0
+//	     }
 //
 // Those two integers are the IIR sample packed as r13<<32|r10.
+const extraBitsBytes = 9 << 11 // h1 is 0..8
+
+func extraBitOff(h1, symMinus1, level, rdx int) int {
+	return (h1<<11 + symMinus1<<8 + level*32 + 8*rdx) / 2
+}
+
 func (h *iirHist) extraSample(st *rANS, bits []uint16, bsf, h1 int) (int, int, error) {
 	if bsf <= 1 {
 		h.applySample(0, 0)
 		return 0, 0, nil
 	}
-	iters := bsf - 1
-	if iters > 16 {
-		iters = 16
+	sym := bsf - 1
+	if sym > 8 {
+		sym = 8
 	}
 	if h1 < 0 {
 		h1 = 0
@@ -108,33 +122,36 @@ func (h *iirHist) extraSample(st *rANS, bits []uint16, bsf, h1 int) (int, int, e
 		h1 = 8
 	}
 	r10, r13 := 0, 0
-	for i := 0; i < iters; i++ {
-		off := (h1*16 + i) * 2
-		if off+1 >= len(bits) {
-			off = 0
+	rdx := 0
+	for i := 0; i < sym; i++ {
+		off := extraBitOff(h1, sym-1, i, rdx)
+		if off < 0 || off+2 >= len(bits) {
+			return 0, 0, errBitstream
 		}
 		b0, err := st.getBit(&bits[off])
 		if err != nil {
 			return 0, 0, err
 		}
-		r10 = r10*2 + b0
-		b1, err := st.getBit(&bits[off+1])
+		b1, err := st.getBit(&bits[off+1+b0])
 		if err != nil {
 			return 0, 0, err
 		}
+		r10 = r10*2 + b0
 		r13 = r13*2 + b1
+		rdx = b1 + 2*b0
 	}
 	h.applySample(uint32(r10), uint32(r13))
 	return r10, r13, nil
 }
 
-// applySample mixes (n0,n1) into w20/w24 and rotates +0x18 into the
-// longer history (assumed caller after 0x14001b1a9).
+// applySample is the callee store at +0x18 plus the caller 3-stage
+// qword rotate: w08←w10←w20←mix.
 func (h *iirHist) applySample(n0, n1 uint32) {
+	mixed0, mixed1 := mixIIR(h.w20, h.w24, n0, n1)
 	h.w08, h.w0c = h.w10, h.w14
-	h.w10, h.w14 = h.w18, h.w1c
-	h.w18, h.w1c = mixIIR(h.w20, h.w24, n0, n1)
-	h.w20, h.w24 = h.w18, h.w1c
+	h.w10, h.w14 = h.w20, h.w24
+	h.w18, h.w1c = mixed0, mixed1
+	h.w20, h.w24 = mixed0, mixed1
 }
 
 func (h *iirHist) h1() int {
@@ -142,7 +159,7 @@ func (h *iirHist) h1() int {
 }
 
 func newExtraBits() []uint16 {
-	p := make([]uint16, 9*16*2)
+	p := make([]uint16, extraBitsBytes/2)
 	for i := range p {
 		initBit(&p[i])
 	}

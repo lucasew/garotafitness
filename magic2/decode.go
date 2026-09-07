@@ -85,20 +85,29 @@ func decodeBest(src []byte) ([]byte, bool) {
 	return nil, false
 }
 
+// emit modes for the 9-sym + extras path. Two packed 4-bit 9-sym
+// values cannot form a full byte (`[` = 0x5b needs nibble 0xb),
+// so r10 (the extra-expanded integer) is the literal candidate.
+const (
+	emitR10byte   = iota // one 9-sym+extras per byte, write r10
+	emitR10nibble        // two calls, (r10h<<4)|r10l
+	emitPacked9          // two calls, (symh<<4)|syml
+)
+
 // decodeIIR uses the 9×9 IIR-hashed nibble grid (0x14001adb0) and
 // the scale-14 lit/match bit (0=literal).
 func decodeIIR(src []byte) ([]byte, bool) {
-	for _, unsigned := range []bool{false, true} {
+	for _, emit := range []int{emitR10byte, emitR10nibble, emitPacked9} {
 		for _, adapt := range []uint{5, 4} {
-			if out, ok := decodeIIRcfg(src, unsigned, adapt); ok {
+			if out, ok := decodeIIRcfg(src, emit, adapt); ok {
 				return out, true
 			}
 		}
 	}
-	return decodeIIRcfg(src, false, 5)
+	return decodeIIRcfg(src, emitR10byte, 5)
 }
 
-func decodeIIRcfg(src []byte, unsigned bool, bitAdapt uint) ([]byte, bool) {
+func decodeIIRcfg(src []byte, emit int, bitAdapt uint) ([]byte, bool) {
 	if len(src) < 4 {
 		return nil, false
 	}
@@ -138,22 +147,42 @@ func decodeIIRcfg(src []byte, unsigned bool, bitAdapt uint) ([]byte, bool) {
 			break
 		}
 		if bit == 0 {
-			hn, bsfH, err := st.getNibbleBSF(hi.cdf(hiGrid))
+			if emit == emitR10byte {
+				_, bsfH, err := st.getNibble9(hi.cdf(hiGrid))
+				if err != nil {
+					break
+				}
+				r10, _, err := hi.extraSample(st, hiBits, bsfH, hi.h1())
+				if err != nil {
+					break
+				}
+				b := byte(r10)
+				out = append(out, b)
+				prev = b
+				continue
+			}
+			hn, bsfH, err := st.getNibble9(hi.cdf(hiGrid))
 			if err != nil {
 				break
 			}
-			if _, _, err := hi.extraSample(st, hiBits, bsfH, hi.h1()); err != nil {
-				break
-			}
-			_ = unsigned
-			ln, bsfL, err := st.getNibbleBSF(lo.cdf(loGrid))
+			r10h, _, err := hi.extraSample(st, hiBits, bsfH, hi.h1())
 			if err != nil {
 				break
 			}
-			if _, _, err := lo.extraSample(st, loBits, bsfL, lo.h1()); err != nil {
+			ln, bsfL, err := st.getNibble9(lo.cdf(loGrid))
+			if err != nil {
 				break
 			}
-			b := byte(hn<<4 | ln)
+			r10l, _, err := lo.extraSample(st, loBits, bsfL, lo.h1())
+			if err != nil {
+				break
+			}
+			var b byte
+			if emit == emitR10nibble {
+				b = byte(r10h<<4 | r10l)
+			} else {
+				b = byte(hn<<4 | ln)
+			}
 			out = append(out, b)
 			prev = b
 			continue

@@ -129,12 +129,15 @@ package magic2
 //	         The 8-sym cmp ecx,1 / add ecx,-2 at 0x14001775e
 //	         is the FCM extra-class loop, not the LZ class.
 //
-//	Nibble extras (0x14001af1b..0x14001b14f): after 16-sym,
-//	bsf==1 → r10=r13=0. Else iterations=bsf-1, each
-//	r10=r10*2+bit0, r13=r13*2+bit1. Packed r13<<32|r10 is
-//	the IIR sample mixed at 0x14001b15f into +0x20, stored
-//	at +0x18. Caller is assumed to rotate +0x18 onto
-//	w08..w24 (not yet pinned to a call site).
+//	Nibble at 0x14001adb0 is 9-sym: pmovmskb + add 0x200 + bsf
+//	(alphabet 0..8 = bitlen8). Adapt psraw $6 toward 0x140001aa0.
+//	CDF row at model+0xb8c00 + h0*288 + h1*32.
+//	Nibble extras (0x14001af1b..0x14001b14f): bsf==1 → r10=r13=0.
+//	Else base = model+(h1<<11)+((sym-1)<<8)+0xb9620. Tree walk:
+//	rdx=0; for i in 0..sym-1 { bit0=getBit(base+i*32+8*rdx);
+//	bit1=getBit(that+2+2*bit0); r10=r10*2+bit0; r13=r13*2+bit1;
+//	rdx=bit1+2*bit0 }. Mix at 0x14001b15f stores +0x18 only.
+//	Caller 3-stage qword rotate: w08←w10←w20←(+0x18).
 //
 //	ROLZ list is allocated in v20d3 ("rolz list buffer") but
 //	-rt is dead since ~v19j. ldmf is the optional long-distance

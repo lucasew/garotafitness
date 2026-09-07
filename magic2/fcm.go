@@ -67,6 +67,7 @@ const (
 	ransScaleBit    = 14
 	ransMB          = 1 << ransScaleBit // 16384
 	adaptNibble     = 7
+	adaptNibble9    = 6 // psraw $6 at 0x14001aecc
 	adaptSym8       = 6
 	adaptBit        = 4
 
@@ -238,6 +239,55 @@ func (r *rANS) getNibbleBSF(cdf []uint16) (sym, bsf int, err error) {
 	return sym, sym + 1, nil
 }
 
+// getNibble9 is the 9-symbol find at 0x14001adb0: pmovmskb + add 0x200
+// + bsf. Alphabet is 0..8 (bitlen8 range). Adapt >>6 toward VA
+// 0x140001aa0. cdf[9] is the sentinel high when no word 1..8 wins.
+func (r *rANS) getNibble9(cdf []uint16) (sym, bsf int, err error) {
+	if len(cdf) < 10 {
+		return 0, 0, errBitstream
+	}
+	if r.off > len(r.buf) && r.x < ransL {
+		return 0, 0, errBitstream
+	}
+	slot := r.x & (ransMN - 1)
+	quo := r.x >> ransScaleNibble
+	i := 9
+	for j := 1; j <= 8; j++ {
+		if int16(cdf[j]) > int16(slot) {
+			i = j
+			break
+		}
+	}
+	start := uint32(cdf[i-1])
+	end := uint32(cdf[i])
+	if end <= start {
+		end = start + 1
+	}
+	r.x = (end-start)*quo + (slot - start)
+	sym = i - 1
+	adaptNibble9CDF(cdf, sym)
+	r.renorm()
+	return sym, i, nil
+}
+
+func adaptNibble9CDF(cdf []uint16, sym int) {
+	if sym < 0 {
+		sym = 0
+	}
+	if sym > 8 {
+		sym = 8
+	}
+	tgt := nibble9Target[sym]
+	n := 16
+	if n > len(cdf) {
+		n = len(cdf)
+	}
+	for j := 0; j < n; j++ {
+		d := int16(tgt[j]) - int16(cdf[j])
+		cdf[j] = uint16(int16(cdf[j]) + d>>adaptNibble9)
+	}
+}
+
 // getSym8 is the 8-symbol mixer/token rANS at 0x1400174e2.
 // cdf is 8 uint16, sentinel bit 7 (add 0x80). Adapt >>6 toward sym8Target.
 // Returns the 1-based bsf index (1 = first symbol), matching `cmp ecx,1`.
@@ -312,6 +362,21 @@ func initSym8CDF(dst []uint16) {
 }
 
 func initBit(p *uint16) { *p = ransMB / 2 }
+
+// nibble9Target is VA 0x140001aa0, 9 rows of 16 u16. Used by the
+// IIR nibble path (0x14001adb0). Row s is the adapt target for
+// symbol s (bsf-1). Slot 9 is 0x8000.
+var nibble9Target = [9][16]uint16{
+	{0x0000, 0x8006, 0x800d, 0x8014, 0x801b, 0x8022, 0x8029, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x800d, 0x8014, 0x801b, 0x8022, 0x8029, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x8014, 0x801b, 0x8022, 0x8029, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x0015, 0x801b, 0x8022, 0x8029, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x0015, 0x001c, 0x8022, 0x8029, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x0015, 0x001c, 0x0023, 0x8029, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x0015, 0x001c, 0x0023, 0x002a, 0x8030, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x0015, 0x001c, 0x0023, 0x002a, 0x0031, 0x8037, 0x8000, 0, 0, 0, 0, 0, 0},
+	{0x0000, 0x0007, 0x000e, 0x0015, 0x001c, 0x0023, 0x002a, 0x0031, 0x0038, 0x8000, 0, 0, 0, 0, 0, 0},
+}
 
 // nibbleTarget is VA 0x140001c00, 16 rows of 16 u16. For symbol s the
 // first s+1 cuts stay near 8,8,16,… and the rest sit at 0x8000+8k so
