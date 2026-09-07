@@ -60,3 +60,46 @@ func TestParseRimWorldVolumes(t *testing.T) {
 		})
 	}
 }
+
+func TestRimWorldPipelineInventory(t *testing.T) {
+	if _, err := os.Stat(rimworldCorpus); err != nil {
+		t.Skip("corpus not mounted")
+	}
+	ents, err := os.ReadDir(rimworldCorpus)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]Algo{}
+	for _, e := range ents {
+		name := e.Name()
+		if !strings.HasPrefix(name, "fg-") || !strings.HasSuffix(name, ".bin") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(rimworldCorpus, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := parseVolume(name, data)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		for _, m := range v.Members {
+			if m.Dir || len(m.Pipeline) == 0 {
+				continue
+			}
+			s := m.Pipeline.String()
+			if _, ok := seen[s]; ok {
+				continue
+			}
+			last := m.Pipeline.Last()
+			seen[s] = last.Algo
+			t.Logf("%s %s last=%s", name, s, last.Algo)
+			if !last.Known() {
+				t.Errorf("%s: unknown last atom %s", name, last)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no pipelines")
+	}
+}

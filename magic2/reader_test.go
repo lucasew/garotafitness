@@ -5,13 +5,17 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 )
 
-// fg-06.bin solid at 0x1F (method magic2).
-var fg06Head = []byte{
-	0x44, 0x48, 0x28, 0x6e, 0x1f, 0x20, 0x00, 0x00,
-	0x00, 0x02, 0x00, 0x25, 0x00, 0x00, 0x00, 0xfa,
+func testdata(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
 }
 
 func TestNewReader(t *testing.T) {
@@ -24,9 +28,11 @@ func TestNewReader(t *testing.T) {
 		{name: "nil", want: errNil},
 		{name: "empty", in: bytes.NewReader(nil), want: io.EOF},
 		{name: "short", in: bytes.NewReader([]byte("DH")), want: io.ErrUnexpectedEOF},
+		{name: "tagonly", in: bytes.NewReader([]byte(lolzTag)), want: io.ErrUnexpectedEOF},
 		{name: "arc", in: bytes.NewReader([]byte("ArC\x01x")), want: errMagic},
 		{name: "srep", in: bytes.NewReader([]byte("SREP\x03")), want: errMagic},
-		{name: "lolz", in: bytes.NewReader(fg06Head), want: errPEOnly},
+		{name: "ver", in: bytes.NewReader([]byte(lolzTag + "\x00")), want: errVersion},
+		{name: "lolz", in: bytes.NewReader(testdata(t, "fg06.head")), want: errPEOnly},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -53,12 +59,13 @@ func TestFG06SolidTag(t *testing.T) {
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	head := make([]byte, len(fg06Head))
+	want := testdata(t, "fg06.head")
+	head := make([]byte, len(want))
 	if _, err := io.ReadFull(f, head); err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(head, fg06Head) {
-		t.Fatalf("fg-06 solid at 0x1F = %x; want %x", head, fg06Head)
+	if !bytes.Equal(head, want) {
+		t.Fatalf("fg-06 solid at 0x1F = %x; want %x", head, want)
 	}
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)

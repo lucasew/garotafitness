@@ -1,0 +1,3 @@
+# fg-01.bin after SREP at volume offset 0x1F. First 16 bytes of the mpzz solid.
+# ASCII: OGGRE then 00 09 then entropy.
+4f 47 47 52 45 00 09 f9 12 8c aa b3 ee ae 5c de
