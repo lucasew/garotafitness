@@ -24,7 +24,7 @@ Non-goals:
 7. Pack, list, or ship a GUI.
 8. Apply installer side effects (registry, hosts file, wallpaper, music).
 
-Inherited C (cite the file): none. The tree is empty.
+Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compilers, make, and wasi-sdk come from the mise `conda:` backend. Host `g++`, nix shells, and registry clang are not the toolchain.
 
 ## Technique
 
@@ -61,7 +61,7 @@ Inherited C (cite the file): none. The tree is empty.
 | Runtime | wazero | D | TEC-07 | |
 | Persistence | none | D | CLI does not store | |
 | UI | none | D | slog is the output | |
-| Packaging | mise registry. conda backend for wasi-sdk and compilers | D | TEC-07 | |
+| Packaging | mise. `conda:` for make, g++, wasi-sdk | C | TEC-07 | mise.toml |
 | Identity | none | D | no accounts | |
 | Host OS | Linux | D | first-class host | |
 
@@ -206,3 +206,4 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - ADR-0001: argv is `extract SOURCE DEST`. Rejected tar-shaped flags.
 - ADR-0002: C++ runs as in-process WASM through wazero. Rejected subprocess and cgo.
 - ADR-0003: `setup.exe` is signal data. Rejected execution of installer DLLs.
+- ADR-0004: Compilers come from mise `conda:`. Rejected nix, host g++, registry clang.

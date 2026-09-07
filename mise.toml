@@ -1,0 +1,52 @@
+# Warning: Do not unify this file with others. Keep tool definitions localized.
+#
+# Compilers and C/C++ build tools use the mise conda backend (conda:make,
+# conda:gxx, later wasi-sdk). Do not use host g++, nix shell, or registry clang.
+[tools]
+go = "1.26.1"
+"conda:make" = "4.4.1"
+"conda:gxx" = "16.2.0"
+
+[tasks."install:tidy"]
+description = "Tidy go.mod and go.sum"
+run = "go mod tidy"
+
+[tasks.install]
+description = "Tidy Go modules"
+depends = ["install:*"]
+
+[tasks."fmt:go"]
+description = "Format Go packages"
+run = "go fmt ./..."
+
+[tasks.fmt]
+description = "Format all"
+depends = ["fmt:*"]
+
+[tasks."lint:vet"]
+description = "Run go vet"
+run = "go vet ./..."
+
+[tasks.lint]
+description = "Lint all"
+depends = ["lint:*"]
+
+[tasks."test:go"]
+description = "Run Go tests"
+run = "go test -count=1 ./..."
+
+[tasks.test]
+description = "Run all tests"
+depends = ["test:*"]
+
+[tasks."build:garotafitness"]
+description = "Build garotafitness into bin/"
+run = "go build -o bin/garotafitness ./cmd/garotafitness"
+
+[tasks.build]
+description = "Build all binaries"
+depends = ["build:*"]
+
+[tasks.ci]
+description = "install, fmt, lint, test, build"
+depends = ["install", "fmt", "lint", "test", "build"]
