@@ -3,9 +3,13 @@ package garotafitness
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
+
+	"github.com/lucasew/garotafitness/setupdata"
 )
 
 // Extractor reads Source and writes Dest.
@@ -24,6 +28,11 @@ func (e Extractor) Extract(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if names, err := scanSetup(e.Source); err != nil {
+		slog.Info("setup.exe", "err", err)
+	} else if len(names) > 0 {
+		slog.Info("setup encoders", "names", names)
+	}
 	vols, err := listVolumes(e.Source)
 	if err != nil {
 		return err
@@ -40,6 +49,22 @@ func (e Extractor) Extract(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+func scanSetup(src fs.FS) ([]string, error) {
+	f, err := src.Open("setup.exe")
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	defer f.Close()
+	info, err := setupdata.Scan(f)
+	if err != nil {
+		return nil, err
+	}
+	return info.Encoders, nil
 }
 
 func extractVolume(ctx context.Context, e Extractor, v Volume) error {

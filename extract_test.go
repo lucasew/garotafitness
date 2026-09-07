@@ -20,6 +20,30 @@ func TestExtractNilDeps(t *testing.T) {
 	}
 }
 
+func TestScanSetup(t *testing.T) {
+	t.Parallel()
+	names, err := scanSetup(fstest.MapFS{})
+	if err != nil || names != nil {
+		t.Fatalf("missing setup.exe: %v %v", names, err)
+	}
+	src := fstest.MapFS{
+		"setup.exe": {Data: []byte("[External compressor:srep]\r\nunpackcmd = srep d\r\n")},
+	}
+	names, err = scanSetup(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, n := range names {
+		if n == "srep" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("encoders %v", names)
+	}
+}
+
 func TestExtractNoVolume(t *testing.T) {
 	t.Parallel()
 	d, err := OpenDirDest(t.TempDir())
