@@ -1,9 +1,9 @@
 // Package magic2 decodes the FitGirl magic2 atom (ProFrager LOLZ v22c4b).
 //
-// On-disk tag is DH(n, then 0x1f on RimWorld fg-02 and fg-06. After
-// that: adaptive rANS (L=1<<23) plus LZ (rep0, nibble/binary FCM
-// models, optional ldmf / DXT / raw). FitGirl method magic2 is the
-// non-ldmf image; magic2l is ldmf.
+// On-disk proved prefix is DH(n + 0x1f (see header.go). After that:
+// adaptive rANS (L=1<<23) plus LZ (rep0, nibble/binary FCM models,
+// optional ldmf / DXT / raw). FitGirl method magic2 is the non-ldmf
+// image; magic2l is ldmf.
 //
 // Official images are PE (cls-lolz / cls-magic2, "v22c4b [Dec 30
 // 2018]"). INV-03 forbids running them. This package reconstructs

@@ -79,11 +79,74 @@ func TestFG06SolidTag(t *testing.T) {
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := ParseHeader(f); err != nil {
+		t.Fatal(err)
+	}
+	rest := make([]byte, len(want)-headerLen)
+	if _, err := io.ReadFull(f, rest); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(rest, want[headerLen:]) {
+		t.Fatalf("fg-06 leftover %x; want %x", rest, want[headerLen:])
+	}
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
 	rc, err := NewReader(f)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { rc.Close() })
+}
+
+func TestFG06DecodeAttempt(t *testing.T) {
+	t.Parallel()
+	src := fg06Payload(t)
+	cfgs := []cfg{
+		{name: "be/s15/a6/8sym", be: true, tokN: 8, adapt: 6},
+		{name: "be/s15/a6/16sym", be: true, tokN: 16, adapt: 6},
+		{name: "le/s15/a6/8sym", be: false, tokN: 8, adapt: 6},
+	}
+	for _, c := range cfgs {
+		out, err := decodeLZ(src, c)
+		if err != nil && len(out) == 0 {
+			t.Logf("%s: empty (%v)", c.name, err)
+			continue
+		}
+		n := 16
+		if n > len(out) {
+			n = len(out)
+		}
+		t.Logf("%s n=%d first=%x", c.name, len(out), out[:n])
+		if len(out) >= emuSize+appidSize {
+			got := crc32.ChecksumIEEE(out[emuSize : emuSize+appidSize])
+			t.Logf("%s appid crc=%08x want=%08x", c.name, got, appidCRC)
+			if got == appidCRC {
+				t.Logf("%s matched steam_appid.txt CRC", c.name)
+			}
+		}
+	}
+}
+
+func fg06Payload(t *testing.T) []byte {
+	t.Helper()
+	const corpus = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-06.bin`
+	f, err := os.Open(corpus)
+	if err != nil {
+		t.Skip("corpus not mounted")
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	raw := make([]byte, 93116)
+	if _, err := io.ReadFull(f, raw); err != nil {
+		t.Fatal(err)
+	}
+	if string(raw[:4]) != lolzTag || raw[4] != verV22c4b {
+		t.Fatalf("solid tag %x", raw[:5])
+	}
+	return raw[5:]
 }
 
 func TestFG06SolidCRC(t *testing.T) {
