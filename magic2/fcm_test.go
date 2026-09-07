@@ -86,6 +86,18 @@ func TestFG06FCMFirst16(t *testing.T) {
 
 	iir, iirok := decodeIIR(src)
 	print16(t, "iir-nibble", iir, iirok)
+	for _, emit := range []struct {
+		n    int
+		name string
+	}{
+		{emitR10byte, "r10byte"},
+		{emitR10nibble, "r10nibble"},
+		{emitPacked9, "packed9"},
+	} {
+		out, ok := decodeIIRcfg(src, emit.n, 5)
+		print16(t, "iir-"+emit.name, out, ok)
+	}
+	print16(t, "iir-nolit", probeNoLit(src), false)
 
 	v22, v22ok := decodeV22(src)
 	print16(t, "v22-bit+nibble", v22, v22ok)
@@ -196,6 +208,31 @@ func print16(t *testing.T, name string, out []byte, ok bool) {
 		got := crc32.ChecksumIEEE(out[emuSize : emuSize+appidSize])
 		fmt.Printf("  appid crc=%08x want=%08x\n", got, appidCRC)
 	}
+}
+
+// probeNoLit decodes a raw 9-sym+extras stream with no lit/match bit.
+func probeNoLit(src []byte) []byte {
+	if len(src) < 4 {
+		return nil
+	}
+	st := &rANS{buf: src, off: 4, x: binary.BigEndian.Uint32(src[:4])}
+	st.renorm()
+	grid := newNibbleGrid()
+	var h iirHist
+	bits := newExtraBits()
+	out := make([]byte, 0, 16)
+	for len(out) < 16 {
+		_, bsf, err := st.getNibble9(h.cdf(grid))
+		if err != nil {
+			break
+		}
+		r10, _, err := h.extraSample(st, bits, bsf, h.h1())
+		if err != nil {
+			break
+		}
+		out = append(out, byte(r10))
+	}
+	return out
 }
 
 func decodeNibblesOnly(src []byte) []byte {

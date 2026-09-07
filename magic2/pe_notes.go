@@ -114,7 +114,9 @@ package magic2
 //	0x800000 checks at 0x1656b / 0x16aea (movdqu [rbp], xmm).
 //
 //	literal: write the byte to the dictionary, advance pos.
-//	match:   16-sym class at 0x140039ae0 (jmp 0x14000a8c0).
+//	match:   16-sym class at 0x140039ae0 (add 0x10000 + bsf,
+//	         adapt >>6 toward 0x140001f00, CDF at model+0x1240,
+//	         jmp 0x14000a8c0).
 //	         class 0 = reuse *rep0 (0x14003a374). There is no
 //	         standalone binary bit "0=new / 1=rep0" — that
 //	         polarity is not in the PE. class 4..10 index

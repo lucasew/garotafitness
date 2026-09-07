@@ -68,11 +68,11 @@ func isRep0(cls int) bool { return cls == 0 }
 //
 // Returns 0..matchClassMax, or -1 if the bsf overflowed.
 func decodeMatchClass(st *rANS, cdf []uint16, adapt uint) (int, error) {
-	bsf, err := st.bsfSym(cdf, 16, 15, adapt)
+	_ = adapt
+	cls, err := st.getNibbleMatch(cdf)
 	if err != nil {
 		return -1, err
 	}
-	cls := bsf - 1
 	if cls < 0 || cls > matchClassMax {
 		return -1, errBitstream
 	}
