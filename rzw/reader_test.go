@@ -4,12 +4,18 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"testing"
 
+	"github.com/lucasew/garotafitness/delta"
+	"github.com/lucasew/garotafitness/dispack"
 	"github.com/lucasew/garotafitness/fourx4"
+	"github.com/lucasew/garotafitness/srep"
 )
+
+const rimworld = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]`
 
 // fg-03.bin solid at 0x1F (rzwb). fg-04 4x4 inner packet is size+CM(.
 var rzwbHead = []byte{
@@ -20,6 +26,23 @@ var rzwbHead = []byte{
 var rzwHead = []byte{
 	'C', 'M', '(', 0x05, 0x06, 0x00, 0x00,
 	0xce, 0x2d, 0x9a, 0xe5, 0x45, 0xe2, 0x09, 0x00, 0x00, 0x00,
+}
+
+// fg-05 members after rzw → delta → dispack → srep, in archive order.
+var fg05Members = []struct {
+	size uint32
+	crc  uint32
+	path string
+}{
+	{613, 0xf2f30dfc, "mover/mover.bat"},
+	{186, 0xf01e6380, "work/work/build01.bat"},
+	{69660, 0xf1df1545, "work/work/fart.exe"},
+	{108544, 0xf081f39d, "work/work/fgpack.exe"},
+	{81920, 0xfd15612a, "work/work/run.exe"},
+	{317952, 0xf7a6f4ee, "work/work/x.exe"},
+	{38, 0xf82f659c, "work/Made by FitGirl.txt"},
+	{712, 0xf01d85d3, "work/work/fitgirl01.txt"},
+	{38, 0xf82f659c, "work/work/Made by FitGirl.txt"},
 }
 
 func TestNewReader(t *testing.T) {
@@ -66,8 +89,8 @@ func TestNewReaderTagged(t *testing.T) {
 			}
 			t.Cleanup(func() { rc.Close() })
 			n, err := rc.Read(make([]byte, 8))
-			if n != 0 || !errors.Is(err, errCodec) {
-				t.Fatalf("Read(%s) n=%d err=%v; want errCodec", tt.name, n, err)
+			if n != 0 || !errors.Is(err, io.ErrUnexpectedEOF) {
+				t.Fatalf("Read(%s) n=%d err=%v; want unexpected EOF", tt.name, n, err)
 			}
 		})
 	}
@@ -88,7 +111,7 @@ func TestNewReaderVersion(t *testing.T) {
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
-	f, err := os.Open("/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-03.bin")
+	f, err := os.Open(rimworld + "/fg-03.bin")
 	if err != nil {
 		t.Skip("corpus not mounted")
 	}
@@ -109,7 +132,7 @@ func TestNewReaderCorpus(t *testing.T) {
 
 func TestFourX4InnerCorpus(t *testing.T) {
 	t.Parallel()
-	f, err := os.Open("/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-04.bin")
+	f, err := os.Open(rimworld + "/fg-04.bin")
 	if err != nil {
 		t.Skip("corpus not mounted")
 	}
@@ -132,5 +155,104 @@ func TestFourX4InnerCorpus(t *testing.T) {
 	}
 	if !errors.Is(err, errCodec) {
 		t.Fatalf("4x4 inner err = %v; want errCodec", err)
+	}
+}
+
+func TestFG05Header(t *testing.T) {
+	t.Parallel()
+	f, err := os.Open(rimworld + "/fg-05.bin")
+	if err != nil {
+		t.Skip("corpus not mounted")
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rc.Close() })
+	rd, ok := rc.(*reader)
+	if !ok {
+		t.Fatalf("reader %T", rc)
+	}
+	if rd.hdr.prefix != 230566 || rd.hdr.packed != 230542 || rd.hdr.crc != 0xe77aa130 {
+		t.Fatalf("hdr prefix=%d packed=%d crc=%#x", rd.hdr.prefix, rd.hdr.packed, rd.hdr.crc)
+	}
+	n, err := rc.Read(make([]byte, 8))
+	if n != 0 || !errors.Is(err, errCodec) {
+		t.Fatalf("Read n=%d err=%v; want errCodec", n, err)
+	}
+}
+
+func TestFG05Pipeline(t *testing.T) {
+	t.Parallel()
+	f, err := os.Open(rimworld + "/fg-05.bin")
+	if err != nil {
+		t.Skip("corpus not mounted")
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	solid, err := NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { solid.Close() })
+	if _, err := io.ReadAll(solid); errors.Is(err, errCodec) {
+		// Kernel is still PE. Framing (prefix/CM(/packed) already checked.
+		t.Log(err)
+		return
+	} else if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	solid, err = NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { solid.Close() })
+	del, err := delta.NewReader(solid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { del.Close() })
+	dis, err := dispack.NewReader(del)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { dis.Close() })
+	sr, err := srep.NewReader(dis)
+	if err != nil {
+		if errors.Is(err, errCodec) {
+			t.Fatalf("rzw kernel: %v", err)
+		}
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sr.Close() })
+	plain, err := io.ReadAll(sr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := 0
+	matched := 0
+	for _, m := range fg05Members {
+		if off+int(m.size) > len(plain) {
+			t.Fatalf("short solid at %s off=%d need=%d have=%d", m.path, off, m.size, len(plain)-off)
+		}
+		got := crc32.ChecksumIEEE(plain[off : off+int(m.size)])
+		if got != m.crc {
+			t.Fatalf("%s crc=%08x want %08x", m.path, got, m.crc)
+		}
+		t.Logf("ok %8d %08x %s", m.size, m.crc, m.path)
+		off += int(m.size)
+		matched++
+	}
+	if matched < 2 {
+		t.Fatalf("matched %d members", matched)
 	}
 }
