@@ -51,9 +51,16 @@ const (
 	appidCRC  = 0xf75982bb
 )
 
-// decodeBest runs the v22 8-symbol token + nibble-literal loop.
-// ok is true only when bytes[2895:2901] hash to the steam_appid.txt CRC.
+// decodeBest runs the PE getBit/getNibble loop (fcm.go) then the older
+// 8-sym probes. ok is true only when bytes[2895:2901] hash to the
+// steam_appid.txt CRC.
 func decodeBest(src []byte) ([]byte, bool) {
+	if out, ok := decodeV22(src); ok {
+		return out, true
+	}
+	if out, ok := decodeFCM(src); ok {
+		return out, true
+	}
 	cfgs := []cfg{
 		{name: "be/s15/a6/8sym", be: true, tokN: 8, adapt: 6},
 		{name: "be/s15/a6/16sym", be: true, tokN: 16, adapt: 6},
@@ -73,6 +80,284 @@ func decodeBest(src []byte) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// decodeFCM is the v22c4b path using PE getBit (scale 14, >>4) and
+// getNibble (scale 15, CDF, >>7). Token is 8-sym at the mixer hash
+// (ecx==1 literal, else ecx-=2 match) as at 0x14001775e.
+// decodeV22 is the PE lit/match bit (0=literal) plus two nibbles.
+// Match path uses 16-sym class (class 0 = rep0).
+func decodeV22(src []byte) ([]byte, bool) {
+	if len(src) < 4 {
+		return nil, false
+	}
+	st := &rANS{buf: src, off: 4, x: binary.BigEndian.Uint32(src[:4])}
+	st.renorm()
+
+	nHi := 1 << (optBLO + optBLR + optPC) // 8+4+2 = 14 → 16384
+	nLo := 1 << (optBLL + 4)              // 8+4 = 12 → 4096
+	nBM := 1 << (optBM + optPC)
+	nCls := 256
+	nLen := 256
+
+	hiTab := make([]uint16, nHi*16)
+	loTab := make([]uint16, nLo*16)
+	clsTab := make([]uint16, nCls*16)
+	lenTab := make([]uint16, nLen*8)
+	for i := 0; i < nHi; i++ {
+		initNibbleCDF(hiTab[i*16 : i*16+16])
+	}
+	for i := 0; i < nLo; i++ {
+		initNibbleCDF(loTab[i*16 : i*16+16])
+	}
+	for i := 0; i < nCls; i++ {
+		initNibbleCDF(clsTab[i*16 : i*16+16])
+	}
+	for i := 0; i < nLen; i++ {
+		initSym8CDF(lenTab[i*8 : i*8+8])
+	}
+	var litP uint16
+	initBit(&litP)
+	// match.go: lit/match adapt is >>5 at some sites
+	bmTab := make([]uint16, nBM)
+	for i := range bmTab {
+		initBit(&bmTab[i])
+	}
+
+	out := make([]byte, 0, wantPlain)
+	prev, rep0lit := byte(0), byte(0)
+	rep0 := 1
+	reps := []int{1, 1, 1, 1}
+
+	for len(out) < wantPlain {
+		if st.x < ransL && st.off >= len(st.buf) {
+			break
+		}
+		bit, err := st.getBitN(&litP, 14, 5)
+		if err != nil {
+			break
+		}
+		if bit == 0 {
+			hi, err := st.getNibble(nibbleAt(hiTab, ctxLiteralHi(prev, rep0lit, len(out))%nHi))
+			if err != nil {
+				break
+			}
+			lo, err := st.getNibble(nibbleAt(loTab, ctxLiteralLo(prev, byte(hi))%nLo))
+			if err != nil {
+				break
+			}
+			b := byte(hi<<4 | lo)
+			out = append(out, b)
+			prev, rep0lit = b, b
+			continue
+		}
+		if len(out) == 0 {
+			break
+		}
+		cls, err := decodeMatchClass(st, nibbleAt(clsTab, int(prev)%nCls), adaptNibble)
+		if err != nil || cls < 0 {
+			break
+		}
+		extra := 0
+		if !isRep0(cls) {
+			nb := newOffsetBits(cls)
+			if nb > 0 {
+				for i := 0; i < nb && i < 18; i++ {
+					b, err := st.getBit(&bmTab[(ctxMatchFlag(rep0lit, len(out))+i)%nBM])
+					if err != nil {
+						return out, false
+					}
+					extra = extra<<1 | b
+				}
+			} else if cls == 10 {
+				ex, err := st.getNibble(nibbleAt(clsTab, (int(prev)+16)%nCls))
+				if err != nil {
+					break
+				}
+				extra = ex
+			} else if cls == 1 || cls == 2 || cls == 3 || cls == 11 {
+				dHi, err := st.getNibble(nibbleAt(hiTab, ctxLiteralHi(prev, rep0lit, len(out))%nHi))
+				if err != nil {
+					break
+				}
+				extra = dHi + 1
+			}
+		}
+		decodeOff(cls, extra, &rep0, reps)
+		var n int
+		switch cls {
+		case 2:
+			b, err := st.getBit(&bmTab[ctxMatchFlag(rep0lit, len(out))%nBM])
+			if err != nil {
+				break
+			}
+			n = decodeLenBit(b)
+		case 3:
+			n, err = decodeLen(st, lenTab[(int(prev)%nLen)*8:(int(prev)%nLen)*8+8], adaptSym8)
+			n = n - matchMinLen + 5
+		case 11:
+			n, err = decodeLen(st, lenTab[(int(prev)%nLen)*8:(int(prev)%nLen)*8+8], adaptSym8)
+			n = n - matchMinLen + 2
+		default:
+			n, err = decodeLen(st, lenTab[(int(prev)%nLen)*8:(int(prev)%nLen)*8+8], adaptSym8)
+		}
+		if err != nil || n <= 0 || rep0 <= 0 || rep0 > len(out) {
+			break
+		}
+		for i := 0; i < n && len(out) < wantPlain; i++ {
+			b := out[len(out)-rep0]
+			out = append(out, b)
+			prev = b
+		}
+		if len(out) > 0 {
+			rep0lit = out[len(out)-1]
+		}
+	}
+	if len(out) < emuSize+appidSize {
+		return out, false
+	}
+	if crc32.ChecksumIEEE(out[emuSize:emuSize+appidSize]) != appidCRC {
+		return out, false
+	}
+	if len(out) > wantPlain {
+		out = out[:wantPlain]
+	}
+	return out, true
+}
+
+func decodeFCM(src []byte) ([]byte, bool) {
+	if len(src) < 4 {
+		return nil, false
+	}
+	st := &rANS{buf: src, off: 4, x: binary.BigEndian.Uint32(src[:4])}
+	st.renorm()
+
+	const (
+		nHi  = 256 * 16 * 4 // blo8 * blr4 * pc2
+		nLo  = 256 * 16
+		nTok = 256 * 16
+		nBM  = 16 * 4
+		nRep = 256
+	)
+	hiTab := make([]uint16, nHi*16)
+	loTab := make([]uint16, nLo*16)
+	tokTab := make([]uint16, nTok*8)
+	for i := 0; i < nHi; i++ {
+		initNibbleCDF(hiTab[i*16 : i*16+16])
+	}
+	for i := 0; i < nLo; i++ {
+		initNibbleCDF(loTab[i*16 : i*16+16])
+	}
+	for i := 0; i < nTok; i++ {
+		initSym8CDF(tokTab[i*8 : i*8+8])
+	}
+	bmTab := make([]uint16, nBM)
+	repTab := make([]uint16, nRep)
+	for i := range bmTab {
+		initBit(&bmTab[i])
+	}
+	for i := range repTab {
+		initBit(&repTab[i])
+	}
+
+	out := make([]byte, 0, wantPlain)
+	prev, rep0lit := byte(0), byte(0)
+	rep0 := 1
+
+	for len(out) < wantPlain {
+		if st.x < ransL && st.off >= len(st.buf) {
+			break
+		}
+		tok, err := st.getSym8(tokTab[ctxMixer(prev)*8 : ctxMixer(prev)*8+8])
+		if err != nil {
+			break
+		}
+		if tok == 1 {
+			hi, err := st.getNibble(nibbleAt(hiTab, ctxLiteralHi(prev, rep0lit, len(out))))
+			if err != nil {
+				break
+			}
+			lo, err := st.getNibble(nibbleAt(loTab, ctxLiteralLo(prev, byte(hi))))
+			if err != nil {
+				break
+			}
+			b := byte(hi<<4 | lo)
+			out = append(out, b)
+			prev, rep0lit = b, b
+			continue
+		}
+		cls := tok - 2
+		if cls < 0 {
+			break
+		}
+		isRep, err := st.getBit(&repTab[int(prev)%nRep])
+		if err != nil {
+			break
+		}
+		if isRep == 0 || rep0 <= 0 || rep0 > len(out) {
+			dHi, err := st.getNibble(nibbleAt(hiTab, 16+cls))
+			if err != nil {
+				break
+			}
+			dist := dHi + 1
+			for i := 0; i < dHi && i < 16; i++ {
+				b, err := st.getBit(&bmTab[(ctxMatchFlag(rep0lit, len(out))+i)%nBM])
+				if err != nil {
+					return out, false
+				}
+				dist = dist<<1 | b
+			}
+			if dist <= 0 {
+				dist = 1
+			}
+			rep0 = dist
+		}
+		ln, err := st.getNibble(nibbleAt(loTab, 0x40+cls))
+		if err != nil {
+			break
+		}
+		n := ln + 2
+		if ln == 15 {
+			en, err := st.getNibble(nibbleAt(loTab, 0x50))
+			if err != nil {
+				break
+			}
+			n += en
+		}
+		if rep0 <= 0 || rep0 > len(out) {
+			break
+		}
+		for i := 0; i < n && len(out) < wantPlain; i++ {
+			b := out[len(out)-rep0]
+			out = append(out, b)
+			prev = b
+		}
+		if len(out) > 0 {
+			rep0lit = out[len(out)-1]
+		}
+	}
+	if len(out) < emuSize+appidSize {
+		return out, false
+	}
+	if crc32.ChecksumIEEE(out[emuSize:emuSize+appidSize]) != appidCRC {
+		return out, false
+	}
+	if len(out) > wantPlain {
+		out = out[:wantPlain]
+	}
+	return out, true
+}
+
+func nibbleAt(tab []uint16, ctx int) []uint16 {
+	if ctx < 0 {
+		ctx = 0
+	}
+	n := len(tab) / 16
+	if n == 0 {
+		return tab
+	}
+	ctx %= n
+	return tab[ctx*16 : ctx*16+16]
 }
 
 type cfg struct {

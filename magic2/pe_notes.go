@@ -65,7 +65,13 @@ package magic2
 //	0x1f; these bytes are the in-memory defaults, not a second
 //	on-disk header.
 //
-// Decode-loop outline (v22c4b x64 .text 0x1656b..0x17920)
+// Decode-loop outline (v22c4b x64 .text 0x1656b..0x17920 is the
+// FCM extra-class pair 0x140017410 / 0x1400179b0. LZ match class
+// + offset/length is decodeMatch @ 0x140039ae0; see match.go.)
+//
+//	PE map (x64): ImageBase 0x140000000, .text file 0x400 ↔
+//	RVA 0x1000 ↔ VA 0x140001000. Entry 0x140043914.
+//	x86 twin: ImageBase 0x400000, .text file 0x400 ↔ RVA 0x1000.
 //
 //	state is a 32-bit rANS register. First payload dword after
 //	DH(n 0x1f is that state, big-endian (fg-06 0x20000000,
@@ -78,22 +84,56 @@ package magic2
 //	    // cmp edx/r10d/r15d, 0x800000; jb
 //	    // shl r32, 8; movzx tmp, byte [src]; or r32, tmp; inc src
 //
-//	binary FCM (alphabet 2): decode one bit. After the symbol:
+//	slot is always state & (M-1), never state % M.
+//	Nibble / 8-sym: M=1<<15, scale 15, freq is a CDF of uint16.
+//	  find first i where int16(cdf[i]) > int16(slot) via
+//	  pcmpgtw/packsswb/pmovmskb + sentinel (0x80 or 0x10000) + bsf.
+//	  state' = (cdf[i]-cdf[i-1])*(state>>15) + slot - cdf[i-1]
+//	  adapt cdf += (target[sym]-cdf) >> 7   (16-sym, psraw $7,
+//	  targets at VA 0x140001c00) or >> 6 (8-sym, VA 0x1400010e0).
+//	Binary: M=1<<14, scale 14, single p0 (x64 0x14001af4a,
+//	x86 0x415af5). if slot < p0 { state = quo*p0+slot;
+//	p0 += (0x4000-p0)>>4 } else { state -= p0*(quo+1); p0 -= p0>>4 }.
+//
+//	Nibble context hash (0x14001adb0):
+//	    h0 = bitlen8(u8((abs(w08-w0c)+abs(w10-w14))>>1))
+//	    h1 = bitlen8(u8(abs(w20-w24)))
+//	    idx = h0*288 + h1*32
+//	Mixer hash (0x140017410):
+//	    absb = abs_bytes(pack(w20,w10)-pack(w24,w14))
+//	    idx = bitlen(b0|b1|b2)<<7 + bitlen(b5)<<4 + bitlen(((w20+w24)>>9)&0x3f)<<10
+//	o1 selectors from -pc2 -bc4 -bm4 -blr4 / -blo8 -bll8: see fcm.go.
+//
+//	binary FCM (alphabet 2): decode one bit. After the 8-sym token:
 //	    cmp ecx, 1 / je  → literal path
 //	    add ecx, -2      → match path
+//	    (0x14001775e)
 //
 //	nibble FCM (alphabet 16): two 4-bit symbols make a literal
 //	byte. SSE stores of 16-byte prob rows sit next to the
 //	0x800000 checks at 0x1656b / 0x16aea (movdqu [rbp], xmm).
 //
 //	literal: write the byte to the dictionary, advance pos.
-//	match:   decode length; if the rep0 bit is set reuse the last
-//	         offset, else decode a new offset into rep0; copy
-//	         dict[pos-rep0 : pos-rep0+len] forward.
+//	match:   16-sym class at 0x140039ae0 (jmp 0x14000a8c0).
+//	         class 0 = reuse *rep0 (0x14003a374). There is no
+//	         standalone binary bit "0=new / 1=rep0" — that
+//	         polarity is not in the PE. class 4..10 index
+//	         extraBitsA690 at 0x14000a690 (cls-4) and rotate
+//	         the recent-offset array. New distances come from
+//	         classes 1/2/3/11; min offset 1.
+//	         length @ 0x140039f87: n = 8-sym + 3, escape 10
+//	         then +extra (add rbx, 0xa). Class 2 is 3+bit.
+//	         -cm1 mixer sits on the lit/match bit (v20
+//	         0x14001387f cmp edx,9): a second binary FCM bit
+//	         only when the mixer table is below 9.
+//	         The 8-sym cmp ecx,1 / add ecx,-2 at 0x14001775e
+//	         is the FCM extra-class loop, not the LZ class.
 //
 //	ROLZ list is allocated in v20d3 ("rolz list buffer") but
 //	-rt is dead since ~v19j. ldmf is the optional long-distance
 //	path (magic2l only).
+//
+//	See fcm.go for getBit / getNibble.
 //
 // DH(n is not stored as a C string in the image (no hit for those
 // four ASCII bytes). The on-disk tag is still those four bytes
