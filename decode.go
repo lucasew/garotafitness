@@ -8,6 +8,7 @@ import (
 	"github.com/lucasew/garotafitness/fourx4"
 	"github.com/lucasew/garotafitness/lzma"
 	"github.com/lucasew/garotafitness/magic2"
+	"github.com/lucasew/garotafitness/mpz"
 	"github.com/lucasew/garotafitness/mpzz"
 	"github.com/lucasew/garotafitness/rzw"
 	"github.com/lucasew/garotafitness/srep"
@@ -33,6 +34,8 @@ func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
 		return magic2.NewReader(r)
 	case AlgoRZW:
 		return rzw.NewReader(r)
+	case AlgoMPZ:
+		return mpz.NewReader(r)
 	case AlgoDelta:
 		return delta.NewReader(r)
 	case Algo4x4:
