@@ -3,36 +3,49 @@ package mpz
 
 import (
 	"errors"
+	"fmt"
 	"io"
 )
 
 // NewReader wraps a Sound Slimmer stream as compress/gzip does.
-// Official decode is PE: arc.ini [External compressor:mpz]
-// unpackcmd `mpz.exe d packed.mpz out.mp3`, installer files mpz.exe /
-// mpzapi.exe / MpzSlimmer.dll (Eugene Shelwien wrapper around the
-// closed Sound Slimmer engine). INV-03 forbids running them. No
-// non-PE source exists to wrap or compile (engine is NDA). Distinct
-// from mpzz (OGGRE) and from packMP3 (.pm3).
 //
-// RimWorld optional OST is srep+4x4:b16mb:mpz. 4x4 calls this as the
-// inner method. On-disk mpz magic is unpublished; this reader rejects
-// known foreign prefixes and otherwise returns errPEOnly.
+// On-disk tag is LE u32 0x01050405 (v5.4.5.1) then orig, frame
+// count, and a zero dword. RimWorld optional OST uses that as the
+// 4x4 inner method (srep:m3f:mem228mb+4x4:b16mb:mpz).
+//
+// Official decode is PE: arc.ini unpackcmd `mpz.exe d packed.mpz
+// out.mp3`. mpzapi (nishi mpzapi_v1b) only LoadLibrary's
+// MpzSlimmer.dll and calls GetModule()->process. The engine is
+// MP3Model::Process (NDA; Shelwien). INV-03 forbids running the
+// image. No non-PE source exists to wrap or compile.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	var head [8]byte
-	n, err := io.ReadFull(r, head[:])
-	if n == 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
-		return nil, io.EOF
-	}
-	if foreign(head[:n]) {
-		return nil, errMagic
-	}
+	h, err := ParseHeader(r)
 	if err != nil {
 		return nil, err
 	}
-	return nil, errPEOnly
+	return &reader{src: r, hdr: h}, nil
+}
+
+type reader struct {
+	src io.Reader
+	hdr Header
+	err error
+}
+
+func (r *reader) Read([]byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	r.err = fmt.Errorf("mpz: %s: %w", r.hdr, errCodec)
+	return 0, r.err
+}
+
+func (r *reader) Close() error {
+	r.err = errClosed
+	return nil
 }
 
 func foreign(b []byte) bool {
@@ -78,5 +91,6 @@ func hasPrefix(b, pfx []byte) bool {
 var (
 	errNil    = errors.New("mpz: nil reader")
 	errMagic  = errors.New("mpz: bad magic")
-	errPEOnly = errors.New("mpz: sound slimmer decoder is PE-only; no non-PE source")
+	errClosed = errors.New("mpz: closed")
+	errCodec  = errors.New("mpz: unpublished MP3Model CM payload; no non-PE decoder")
 )

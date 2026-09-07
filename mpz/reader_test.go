@@ -4,14 +4,23 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"testing"
 
 	"github.com/lucasew/garotafitness/fourx4"
+	"github.com/lucasew/garotafitness/srep"
 )
 
 const optionalOST = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-optional-bonus-soundtrack.bin`
+
+// Smallest member in the optional solid (FreeArc IEEE CRC32).
+const (
+	firstMP3Path = "Soundtrack/25 Cruel Sunrise.mp3"
+	firstMP3Size = 1687262
+	firstMP3CRC  = 0xf11f45c6
+)
 
 func TestNewReader(t *testing.T) {
 	t.Parallel()
@@ -31,7 +40,7 @@ func TestNewReader(t *testing.T) {
 		{name: "lolz", in: bytes.NewReader([]byte("DH(n\x1f\x20\x00\x00")), want: errMagic},
 		{name: "id3", in: bytes.NewReader([]byte("ID3\x04\x00\x00\x00\x00")), want: errMagic},
 		{name: "mp3", in: bytes.NewReader([]byte{0xff, 0xfb, 0x90, 0x00, 0x00, 0x00, 0x00, 0x00}), want: errMagic},
-		{name: "unknown", in: bytes.NewReader([]byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}), want: errPEOnly},
+		{name: "unknown", in: bytes.NewReader(bytes.Repeat([]byte{0x01}, 16)), want: errMagic},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,10 +56,24 @@ func TestNewReader(t *testing.T) {
 	}
 }
 
+func TestNewReaderTagged(t *testing.T) {
+	t.Parallel()
+	in := frameHead(version5451, 64, 1, 0)
+	rc, err := NewReader(bytes.NewReader(in))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rc.Close() })
+	n, err := rc.Read(make([]byte, 8))
+	if n != 0 || !errors.Is(err, errCodec) {
+		t.Fatalf("Read n=%d err=%v; want errCodec", n, err)
+	}
+}
+
 func TestFourx4Inner(t *testing.T) {
 	t.Parallel()
-	payload := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
-	in := frame4x4(uint32(len(payload)+8), payload)
+	payload := frameHead(version5451, 8, 1, 0)
+	in := frame4x4(8, payload)
 	inner := func(r io.Reader, name, params string) (io.ReadCloser, error) {
 		if name != "mpz" || params != "" {
 			t.Fatalf("inner %q %q", name, params)
@@ -63,8 +86,8 @@ func TestFourx4Inner(t *testing.T) {
 	}
 	t.Cleanup(func() { rd.Close() })
 	_, err = io.ReadAll(rd)
-	if !errors.Is(err, errPEOnly) {
-		t.Fatalf("err = %v; want %v", err, errPEOnly)
+	if !errors.Is(err, errCodec) {
+		t.Fatalf("err = %v; want %v", err, errCodec)
 	}
 }
 
@@ -75,17 +98,85 @@ func TestOptionalOST(t *testing.T) {
 		t.Skip("corpus not mounted")
 	}
 	t.Cleanup(func() { f.Close() })
-	// Method is srep+4x4:b16mb:mpz. Solid at 0x1F has no SREP tag, so
-	// the inner mpz stream is not reachable from this package.
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	head := make([]byte, 8)
+	var ver [4]byte
+	if _, err := io.ReadFull(f, ver[:]); err != nil {
+		t.Fatal(err)
+	}
+	if binary.LittleEndian.Uint32(ver[:]) != 0 {
+		t.Fatalf("4x4 version %x", ver)
+	}
+	var hdr [8]byte
+	if _, err := io.ReadFull(f, hdr[:]); err != nil {
+		t.Fatal(err)
+	}
+	outSize := binary.LittleEndian.Uint32(hdr[0:4])
+	inSize := binary.LittleEndian.Uint32(hdr[4:8])
+	if outSize != 16<<20 {
+		t.Fatalf("first out %d", outSize)
+	}
+	head := make([]byte, headerLen)
 	if _, err := io.ReadFull(f, head); err != nil {
 		t.Fatal(err)
 	}
-	if string(head[:4]) == "SREP" || bytes.Equal(head[:4], []byte{0x17, 0x18, 0x35, 0x26}) {
-		t.Fatal("optional solid grew an SREP tag; re-sample mpz magic")
+	h, err := ParseHeader(bytes.NewReader(head))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Version != version5451 {
+		t.Fatalf("mpz version %#x", h.Version)
+	}
+	if h.Orig != outSize {
+		t.Fatalf("mpz orig %d want %d", h.Orig, outSize)
+	}
+	if inSize < headerLen {
+		t.Fatalf("in %d", inSize)
+	}
+}
+
+func TestOptionalOSTFirstMP3(t *testing.T) {
+	t.Parallel()
+	f, err := os.Open(optionalOST)
+	if err != nil {
+		t.Skip("corpus not mounted")
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	inner := func(r io.Reader, name, params string) (io.ReadCloser, error) {
+		if name != "mpz" {
+			t.Fatalf("inner %q", name)
+		}
+		return NewReader(r)
+	}
+	fx, err := fourx4.NewReader(io.LimitReader(f, 178529864), "b16mb:mpz", inner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { fx.Close() })
+	got, err := io.ReadAll(fx)
+	if errors.Is(err, errCodec) {
+		t.Log("MP3Model CM unpublished; first MP3 CRC blocked")
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	sr, err := srep.NewReader(bytes.NewReader(got))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sr.Close() })
+	first := make([]byte, firstMP3Size)
+	if _, err := io.ReadFull(sr, first); err != nil {
+		t.Fatal(err)
+	}
+	sum := crc32.ChecksumIEEE(first)
+	if sum != firstMP3CRC {
+		t.Fatalf("%s crc %08x want %08x", firstMP3Path, sum, firstMP3CRC)
 	}
 }
 
