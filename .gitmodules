@@ -1,0 +1,6 @@
+[submodule "third_party/srep"]
+	path = third_party/srep
+	url = https://github.com/Intensity/srep.git
+[submodule "third_party/freearc"]
+	path = third_party/freearc
+	url = https://github.com/mrkaban/FreeArc-0.67.git

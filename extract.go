@@ -124,7 +124,7 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 	if s.off < 0 || end > int64(len(data)) {
 		return fmt.Errorf("solid span")
 	}
-	r, err := openDecoder(bytes.NewReader(data[s.off:end]), s.pipe[0])
+	r, err := Decode(bytes.NewReader(data[s.off:end]), s.pipe[0])
 	if err != nil {
 		return err
 	}

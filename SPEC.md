@@ -153,7 +153,7 @@ N/A for the library surface (genre=library).
 
 ## Public contract
 
-Library: `Extractor.Extract` is the composition entry. Each Encoder package exports `NewReader`. Volume open is the container entry.
+Library: `Extractor.Extract` is the composition entry. Each Algo package `<algo>/` exports `NewReader`. `Decode` in the root package is the switch. Volume open is the container entry. `4x4` Params hold the inner method. x2, x3, x5, and fgpack are Algos.
 
 CLI:
 
@@ -212,3 +212,4 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - ADR-0002: C++ runs as in-process WASM through wazero. Rejected subprocess and cgo.
 - ADR-0003: `setup.exe` is signal data. Rejected execution of installer DLLs.
 - ADR-0004: Compilers come from mise `conda:`. Rejected nix, host g++, registry clang.
+- ADR-0005: One Algo package at module root. Agents do not edit the Decode switch.
