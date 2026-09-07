@@ -74,6 +74,20 @@ static const uint16_t kSym8Tgt[7][8] = {
 
 static const int kA690[7] = {0, 1, 2, 3, 17, 18, 0};
 
+// VA 0x14000a2b0. v22 token: if mixTab[ctx] < 0x63, a second >>5 bit
+// can turn a literal into the al==2 (DXT) path. tab[0]==13 so the
+// first symbol always takes that extra bit when ctx is 0.
+static const uint8_t kMixTab[256] = {
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 73, 77, 72, 76, 76, 108, 140, 75, 75, 107, 74, 74, 74, 107, 107, 73,
+    73, 139, 72, 72, 72, 106, 106, 106, 139, 139, 139, 69, 69, 69, 105, 145, 77, 112, 145, 177, 76, 177, 177, 177, 75, 177, 111, 74, 74, 144, 73, 73,
+    73, 110, 110, 110, 72, 144, 144, 71, 109, 70, 70, 109, 109, 143, 143, 143, 108, 108, 108, 108, 108, 108, 143, 143, 143, 143, 143, 176, 107, 107, 107, 176,
+    176, 176, 176, 176, 176, 176, 176, 106, 142, 142, 142, 142, 142, 142, 142, 105, 105, 104, 104, 104, 104, 104, 104, 104, 104, 141, 141, 141, 103, 103, 103, 103,
+    141, 141, 141, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 140, 140, 140, 140, 139, 139, 139, 139, 139, 139, 139, 139, 139,
+    139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 138, 174, 138, 138, 174, 137,
+    137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 173, 173, 136, 173, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136,
+    173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172,
+};
+
 struct Rans {
   uint32_t x;
   const uint8_t *buf;
@@ -349,7 +363,11 @@ static int ctx_hi(int prev, int rep0lit, int pos) {
   return (prev >> 0) | ((rep0lit >> 4) << 8) | ((pos & 3) << 12);
 }
 
-static int ctx_lo(int prev, int hi) { return ((prev >> 0) << 4) | hi; }
+// v20 0x140013a64 / v22 0x14002ba51: if hi == prev>>4 use (prev&0xf)+16 else hi.
+static int ctx_lo_pe(int prev, int hi) {
+  if (hi == ((prev >> 4) & 0xf)) return (prev & 0xf) + 16;
+  return hi;
+}
 
 static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (slen < 4) return 0;
@@ -371,23 +389,33 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   for (int i = 0; i < nCls; i++) init_nibble(clsTab + i * 16);
   for (int i = 0; i < nLen; i++) init_sym8(lenTab + i * 8);
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
-  uint16_t litP = kMB / 2;
+  uint16_t litP[512];
+  for (int i = 0; i < 512; i++) litP[i] = kMB / 2;
   int n = 0, prev = 0, rep0lit = 0, rep0 = 1;
   int reps[4] = {1, 1, 1, 1};
   while (n < dcap && n < kWant && r.ok) {
     if (r.x < kL && r.off >= r.len) break;
-    int bit = get_bit(&r, &litP, 14, 5);
+    int mix = kMixTab[prev & 255];
+    int pctx = (prev & 255) * 2;
+    int bit = get_bit(&r, &litP[pctx], 14, 5);
     if (bit < 0) break;
-    if (bit == 0) {
-      int hi = get_nibble(&r, hiTab + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
+    int tok = bit; // 0=lit 1=match; 2=DXT if second bit
+    if (bit == 0 && mix < 0x63) {
+      int b2 = get_bit(&r, &litP[pctx + 1], 14, 5);
+      if (b2 < 0) break;
+      if (b2 == 1) tok = 2;
+    }
+    if (tok == 0) {
+      int hi = get_nibble(&r, hiTab + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 6, kMatchTgt);
       if (hi < 0) break;
-      int lo = get_nibble(&r, loTab + (ctx_lo(prev, hi) % nLo) * 16, 16, 7, kNibbleTgt);
+      int lo = get_nibble(&r, loTab + (ctx_lo_pe(prev, hi) % nLo) * 16, 16, 7, kNibbleTgt);
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
       dst[n++] = b;
       prev = rep0lit = b;
       continue;
     }
+    if (tok == 2) break; // DXT/special not lifted yet
     if (n == 0) break;
     int cls = get_nibble(&r, clsTab + (prev % nCls) * 16, 16, 6, kMatchTgt);
     if (cls < 0 || cls > 11) break;
@@ -432,14 +460,17 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
     }
     if (n > 0) rep0lit = dst[n - 1];
   }
-  return hit_crc(dst, n) ? n : 0;
+  return n;
 }
 
 extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (!src || slen < 4 || !dst || dcap <= 0) return 0;
-  int n = decode_iir(src, slen, dst, dcap, 5);
-  if (n > 0) return n;
+  int n = decode_v22(src, slen, dst, dcap);
+  if (hit_crc(dst, n)) return n;
+  n = decode_iir(src, slen, dst, dcap, 5);
+  if (hit_crc(dst, n)) return n;
   n = decode_iir(src, slen, dst, dcap, 4);
-  if (n > 0) return n;
+  if (hit_crc(dst, n)) return n;
+  // still return v22 bytes so first-16 probes can see the token path
   return decode_v22(src, slen, dst, dcap);
 }

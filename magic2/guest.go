@@ -88,13 +88,17 @@ func decodeWASM(src []byte) ([]byte, bool) {
 	}
 	n := uint32(res[0])
 	out, ok := mem.Read(dstPtr, n)
-	if !ok || len(out) < emuSize+appidSize {
+	if !ok || n == 0 {
 		return nil, false
 	}
-	if crc32.ChecksumIEEE(out[emuSize:emuSize+appidSize]) != appidCRC {
-		return nil, false
+	cloned := bytes.Clone(out)
+	if len(cloned) < emuSize+appidSize {
+		return cloned, false
 	}
-	return bytes.Clone(out), true
+	if crc32.ChecksumIEEE(cloned[emuSize:emuSize+appidSize]) != appidCRC {
+		return cloned, false
+	}
+	return cloned, true
 }
 
 // ioDiscard is a tiny io.Writer so guest.go does not pull extra names.
