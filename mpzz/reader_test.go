@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"strings"
@@ -18,6 +19,13 @@ var fg01Head = []byte{
 	0x12, 0x8c, 0xaa, 0xb3, 0xee, 0xae, 0x5c, 0xde,
 }
 
+const (
+	fg01InnerSize = 255994514
+	fg01InnerCRC  = 0xf7a300d7
+	fg01SolidOff  = 0x1F
+	fg01Corpus    = "/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-01.bin"
+)
+
 func TestNewReader(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -30,7 +38,8 @@ func TestNewReader(t *testing.T) {
 		{name: "short", in: bytes.NewReader([]byte("OGG")), want: io.ErrUnexpectedEOF},
 		{name: "arc", in: bytes.NewReader([]byte("ArC\x01x")), want: errMagic},
 		{name: "ogg", in: bytes.NewReader([]byte("OggS\x00")), want: errMagic},
-		{name: "oggre", in: bytes.NewReader(fg01Head), want: errPEOnly},
+		{name: "ver", in: bytes.NewReader([]byte("OGGRE\x01\x09")), want: errVersion},
+		{name: "stat", in: bytes.NewReader([]byte("OGGRE\x00\x04")), want: errFlags},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -43,6 +52,19 @@ func TestNewReader(t *testing.T) {
 				t.Fatalf("NewReader(%s) err = %v; want %v", tt.name, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestNewReaderOGGRE(t *testing.T) {
+	t.Parallel()
+	rc, err := NewReader(bytes.NewReader(fg01Head))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rc.Close() })
+	n, err := rc.Read(make([]byte, 8))
+	if n != 0 || !errors.Is(err, errCodec) {
+		t.Fatalf("Read n=%d err=%v; want 0 %v", n, err, errCodec)
 	}
 }
 
@@ -75,12 +97,12 @@ func TestHeaderHex(t *testing.T) {
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
-	f, err := os.Open("/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-01.bin")
+	f, err := os.Open(fg01Corpus)
 	if err != nil {
 		t.Skip("corpus not mounted")
 	}
 	t.Cleanup(func() { f.Close() })
-	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+	if _, err := f.Seek(fg01SolidOff, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
 	sr, err := srep.NewReader(f)
@@ -88,18 +110,25 @@ func TestNewReaderCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { sr.Close() })
-	head := make([]byte, len(fg01Head))
-	if _, err := io.ReadFull(sr, head); err != nil {
+	rc, err := NewReader(sr)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(head, fg01Head) {
-		t.Fatalf("fg-01 after SREP = %x; want %x", head, fg01Head)
+	t.Cleanup(func() { rc.Close() })
+	h := crc32.NewIEEE()
+	n, err := io.Copy(h, rc)
+	if errors.Is(err, errCodec) {
+		t.Log(err)
+		return
 	}
-	rc, err := NewReader(bytes.NewReader(head))
-	if rc != nil {
-		t.Fatalf("reader = %T; want nil", rc)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(err, errPEOnly) {
-		t.Fatalf("err = %v; want %v", err, errPEOnly)
+	if n != fg01InnerSize {
+		t.Fatalf("size %d; want %d", n, fg01InnerSize)
+	}
+	got := h.Sum32()
+	if got != fg01InnerCRC {
+		t.Fatalf("crc32 %08x; want %08x", got, fg01InnerCRC)
 	}
 }

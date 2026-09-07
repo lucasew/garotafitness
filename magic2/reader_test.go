@@ -3,6 +3,7 @@ package magic2
 import (
 	"bytes"
 	"errors"
+	"hash/crc32"
 	"io"
 	"os"
 	"path/filepath"
@@ -32,7 +33,6 @@ func TestNewReader(t *testing.T) {
 		{name: "arc", in: bytes.NewReader([]byte("ArC\x01x")), want: errMagic},
 		{name: "srep", in: bytes.NewReader([]byte("SREP\x03")), want: errMagic},
 		{name: "ver", in: bytes.NewReader([]byte(lolzTag + "\x00")), want: errVersion},
-		{name: "lolz", in: bytes.NewReader(testdata(t, "fg06.head")), want: errPEOnly},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -46,6 +46,15 @@ func TestNewReader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNewReaderAcceptsHeader(t *testing.T) {
+	t.Parallel()
+	rc, err := NewReader(bytes.NewReader(testdata(t, "fg06.head")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rc.Close() })
 }
 
 func TestFG06SolidTag(t *testing.T) {
@@ -71,10 +80,60 @@ func TestFG06SolidTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	rc, err := NewReader(f)
-	if rc != nil {
-		t.Fatalf("reader = %T; want nil", rc)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !errors.Is(err, errPEOnly) {
-		t.Fatalf("err = %v; want %v", err, errPEOnly)
+	t.Cleanup(func() { rc.Close() })
+}
+
+func TestFG06SolidCRC(t *testing.T) {
+	t.Parallel()
+	const corpus = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-06.bin`
+	f, err := os.Open(corpus)
+	if err != nil {
+		t.Skip("corpus not mounted")
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
+		t.Fatal(err)
+	}
+	rc, err := NewReader(io.LimitReader(f, 93116))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rc.Close() })
+	plain, err := io.ReadAll(rc)
+	if errors.Is(err, errBitstream) {
+		t.Skip(err.Error())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	members := []struct {
+		size uint32
+		crc  uint32
+		path string
+	}{
+		{2895, 0xfb362bfa, "RimWorldWin64_Data/Plugins/x86_64/steam_emu.ini"},
+		{6, 0xf75982bb, "steam_appid.txt"},
+		{190, 0xf845695f, "SteamInputDefaultConfiguration.vdf"},
+		{13622, 0xfd88d720, "SteamInputDefaultConfiguration_SteamDeck.vdf"},
+		{414176, 0xf37ba5cf, "rimworld.x3"},
+	}
+	var total int
+	for _, m := range members {
+		total += int(m.size)
+	}
+	if len(plain) != total {
+		t.Fatalf("unpacked %d; want %d", len(plain), total)
+	}
+	off := 0
+	for _, m := range members {
+		chunk := plain[off : off+int(m.size)]
+		got := crc32.ChecksumIEEE(chunk)
+		if got != m.crc {
+			t.Errorf("%s crc=%08x; want %08x", m.path, got, m.crc)
+		}
+		off += int(m.size)
 	}
 }

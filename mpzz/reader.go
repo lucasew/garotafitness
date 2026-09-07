@@ -3,49 +3,89 @@ package mpzz
 
 import (
 	"errors"
+	"fmt"
 	"io"
 )
 
 // oggre is the inner tag on fg-01 after SREP (SREP keeps unique literals).
 const oggre = "OGGRE"
 
+const (
+	ver0         = 0x00
+	statMask     = 0x07 // books-stat -sX, X in [0,3]
+	flagSolidBit = 0x08 // set when solid mode is on (default; -ds clears)
+)
+
 // NewReader wraps an OGGRE stream as compress/gzip does.
 //
+// On-disk: "OGGRE" + u8 version + u8 flags, then a 16-bit range-coded
+// payload that rebuilds Ogg pages (writes "OggS") and setup frames.
+// flags bits 0-2 are books-stat (0..3); bit 3 is solid. fg-01 is
+// version 0, flags 0x09 (-s1, solid). Not LZMA/zstd/gzip.
+//
 // Official decode is PE: arc.ini unpackcmd oggre_dec.exe, installer
-// file cls-mpzz.dll (export name CLS-OGGRE.dll). That image is packed
-// (VirtualAlloc stub only). INV-03 forbids running it.
-//
-// OGGRE v0.1.1 (ProFrager, 2017, closed, discontinued) is an Ogg
-// Vorbis recompressor: ogg-page and setup-frame (codebook) dedup,
-// optional solid mode. Encoder flags: -sX books-stat [0;3] default 1,
-// -dd disable ogg dedup, -df disable setup-frame dedup, -ds disable
-// solid. No public C/C++. Searched GitHub, grep.app, encode.su
-// (binaries only, Cloudflare), krinkels.org (registration),
-// archive.org: no non-PE source to wrap or compile.
-//
-// Live fg-01 (mpzz+srep:m3f:mem228mb → inner.fgpack): after SREP the
-// first 16 bytes are testdata/header.hex. Bytes after 00 09 are not
-// LZMA/xz/zstd/gzip/zlib/lz4/bzip2. An 8 MiB scan has no OggS,
-// vorbis, ArC, or fgpack tag; every 64 KiB window uses all 256 byte
-// values. A 1-byte XOR sweep of the first MiB found no repeating
-// OggS. The payload is a custom entropy coder; the bitstream alone
-// does not give a decoder.
+// file cls-mpzz.dll (export name CLS-OGGRE.dll). That image is a
+// VirtualAlloc LZMA stub (lc=3,lp=0,pb=2) over the real CLS. INV-03
+// forbids running it. No public C/C++ of OGGRE v0.1.1 exists.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	var magic [5]byte
-	if _, err := io.ReadFull(r, magic[:]); err != nil {
+	h, err := parseHeader(r)
+	if err != nil {
 		return nil, err
 	}
-	if string(magic[:]) != oggre {
-		return nil, errMagic
+	return &reader{src: r, hdr: h}, nil
+}
+
+type header struct {
+	ver   uint8
+	flags uint8
+}
+
+func parseHeader(r io.Reader) (header, error) {
+	var b [7]byte
+	n, err := io.ReadFull(r, b[:])
+	if n >= 5 && string(b[:5]) != oggre {
+		return header{}, errMagic
 	}
-	return nil, errPEOnly
+	if err != nil {
+		return header{}, err
+	}
+	h := header{ver: b[5], flags: b[6]}
+	if h.ver != ver0 {
+		return header{}, fmt.Errorf("mpzz: version %d: %w", h.ver, errVersion)
+	}
+	if h.flags&statMask > 3 {
+		return header{}, fmt.Errorf("mpzz: books-stat %d: %w", h.flags&statMask, errFlags)
+	}
+	return h, nil
+}
+
+type reader struct {
+	src io.Reader
+	hdr header
+	err error
+}
+
+func (r *reader) Read([]byte) (int, error) {
+	if r.err != nil {
+		return 0, r.err
+	}
+	r.err = fmt.Errorf("mpzz: v%d flags %#x: %w", r.hdr.ver, r.hdr.flags, errCodec)
+	return 0, r.err
+}
+
+func (r *reader) Close() error {
+	r.err = errClosed
+	return nil
 }
 
 var (
-	errNil    = errors.New("mpzz: nil reader")
-	errMagic  = errors.New("mpzz: bad magic")
-	errPEOnly = errors.New("mpzz: oggre v0.1.1 decoder is PE-only; no non-PE source")
+	errNil     = errors.New("mpzz: nil reader")
+	errMagic   = errors.New("mpzz: bad magic")
+	errVersion = errors.New("mpzz: bad version")
+	errFlags   = errors.New("mpzz: bad flags")
+	errClosed  = errors.New("mpzz: closed")
+	errCodec   = errors.New("mpzz: unpublished ogg/codebook entropy; no non-PE decoder")
 )
