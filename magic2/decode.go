@@ -108,6 +108,8 @@ func decodeIIRcfg(src []byte, unsigned bool, bitAdapt uint) ([]byte, bool) {
 	hiGrid := newNibbleGrid()
 	loGrid := newNibbleGrid()
 	var hi, lo iirHist
+	hiBits := newExtraBits()
+	loBits := newExtraBits()
 	var litP uint16
 	initBit(&litP)
 
@@ -136,23 +138,20 @@ func decodeIIRcfg(src []byte, unsigned bool, bitAdapt uint) ([]byte, bool) {
 			break
 		}
 		if bit == 0 {
-			hn, err := st.getNibble(hi.cdf(hiGrid))
+			hn, bsfH, err := st.getNibbleBSF(hi.cdf(hiGrid))
 			if err != nil {
 				break
 			}
-			if unsigned {
-				hi.afterNibbleU(hn)
-			} else {
-				hi.afterNibble(hn)
+			if _, _, err := hi.extraSample(st, hiBits, bsfH, hi.h1()); err != nil {
+				break
 			}
-			ln, err := st.getNibble(lo.cdf(loGrid))
+			_ = unsigned
+			ln, bsfL, err := st.getNibbleBSF(lo.cdf(loGrid))
 			if err != nil {
 				break
 			}
-			if unsigned {
-				lo.afterNibbleU(ln)
-			} else {
-				lo.afterNibble(ln)
+			if _, _, err := lo.extraSample(st, loBits, bsfL, lo.h1()); err != nil {
+				break
 			}
 			b := byte(hn<<4 | ln)
 			out = append(out, b)

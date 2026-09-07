@@ -229,6 +229,15 @@ func (r *rANS) getNibble(cdf []uint16) (int, error) {
 	return sym, nil
 }
 
+// getNibbleBSF is getNibble plus the 1-based bsf index (PE r12d).
+func (r *rANS) getNibbleBSF(cdf []uint16) (sym, bsf int, err error) {
+	sym, err = r.getNibble(cdf)
+	if err != nil {
+		return 0, 0, err
+	}
+	return sym, sym + 1, nil
+}
+
 // getSym8 is the 8-symbol mixer/token rANS at 0x1400174e2.
 // cdf is 8 uint16, sentinel bit 7 (add 0x80). Adapt >>6 toward sym8Target.
 // Returns the 1-based bsf index (1 = first symbol), matching `cmp ecx,1`.

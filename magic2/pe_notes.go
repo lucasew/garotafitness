@@ -129,6 +129,13 @@ package magic2
 //	         The 8-sym cmp ecx,1 / add ecx,-2 at 0x14001775e
 //	         is the FCM extra-class loop, not the LZ class.
 //
+//	Nibble extras (0x14001af1b..0x14001b14f): after 16-sym,
+//	bsf==1 → r10=r13=0. Else iterations=bsf-1, each
+//	r10=r10*2+bit0, r13=r13*2+bit1. Packed r13<<32|r10 is
+//	the IIR sample mixed at 0x14001b15f into +0x20, stored
+//	at +0x18. Caller is assumed to rotate +0x18 onto
+//	w08..w24 (not yet pinned to a call site).
+//
 //	ROLZ list is allocated in v20d3 ("rolz list buffer") but
 //	-rt is dead since ~v19j. ldmf is the optional long-distance
 //	path (magic2l only).

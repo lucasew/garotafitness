@@ -26,6 +26,17 @@ func TestMixIIR(t *testing.T) {
 	}
 }
 
+func TestExtraSampleZero(t *testing.T) {
+	t.Parallel()
+	var h iirHist
+	st := &rANS{x: 0x20000000}
+	bits := newExtraBits()
+	a, b, err := h.extraSample(st, bits, 1, 0)
+	if err != nil || a != 0 || b != 0 {
+		t.Fatalf("bsf1 %d %d %v", a, b, err)
+	}
+}
+
 func TestIIRRowMoves(t *testing.T) {
 	t.Parallel()
 	var h iirHist
