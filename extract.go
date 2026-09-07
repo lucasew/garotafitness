@@ -1,8 +1,10 @@
 package garotafitness
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"io/fs"
 )
 
@@ -49,15 +51,100 @@ func extractVolume(ctx context.Context, e Extractor, v Volume) error {
 		return fmt.Errorf("open %s: %w", v.Name, err)
 	}
 	defer f.Close()
-	parsed, err := readVolume(f, v.Name)
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", v.Name, err)
+	}
+	parsed, err := parseVolume(v.Name, data)
 	if err != nil {
 		return err
 	}
 	for _, m := range parsed.Members {
+		if !m.Dir {
+			continue
+		}
+		if err := e.Dest.MkdirAll(m.Path, 0o755); err != nil {
+			return err
+		}
+	}
+	for _, s := range groupSolids(parsed.Members) {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := extractSolid(e, data, s); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type solid struct {
+	pipe  Pipeline
+	off   int64
+	csz   uint64
+	files []Member
+}
+
+func groupSolids(ms []Member) []solid {
+	type key struct {
+		pipe string
+		off  int64
+		csz  uint64
+	}
+	order := make([]key, 0)
+	by := make(map[key]*solid)
+	for _, m := range ms {
 		if m.Dir {
 			continue
 		}
-		return unknownEncoderError(m.Pipeline.Last())
+		k := key{m.Pipeline.String(), m.Offset, m.CompSize}
+		s, ok := by[k]
+		if !ok {
+			s = &solid{pipe: m.Pipeline, off: m.Offset, csz: m.CompSize}
+			by[k] = s
+			order = append(order, k)
+		}
+		s.files = append(s.files, m)
 	}
-	return fmt.Errorf("unknown encoder: volume %s has no members", v.Name)
+	out := make([]solid, 0, len(order))
+	for _, k := range order {
+		out = append(out, *by[k])
+	}
+	return out
+}
+
+func extractSolid(e Extractor, data []byte, s solid) error {
+	if len(s.files) == 0 {
+		return nil
+	}
+	if len(s.pipe) != 1 {
+		return unknownEncoderError(s.pipe.Last())
+	}
+	end := s.off + int64(s.csz)
+	if s.off < 0 || end > int64(len(data)) {
+		return fmt.Errorf("solid span")
+	}
+	r, err := openDecoder(bytes.NewReader(data[s.off:end]), s.pipe[0])
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+	for _, m := range s.files {
+		if err := writeMember(e.Dest, m, io.LimitReader(r, int64(m.Size))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeMember(dst Dest, m Member, r io.Reader) error {
+	w, err := dst.Create(m.Path)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(w, r); err != nil {
+		w.Close()
+		return fmt.Errorf("write %s: %w", m.Path, err)
+	}
+	return w.Close()
 }
