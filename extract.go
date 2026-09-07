@@ -117,20 +117,32 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 	if len(s.files) == 0 {
 		return nil
 	}
-	if len(s.pipe) != 1 {
-		return unknownEncoderError(s.pipe.Last())
+	if len(s.pipe) == 0 {
+		return unknownEncoderError(Atom{})
 	}
 	end := s.off + int64(s.csz)
 	if s.off < 0 || end > int64(len(data)) {
 		return fmt.Errorf("solid span")
 	}
-	r, err := Decode(bytes.NewReader(data[s.off:end]), s.pipe[0])
-	if err != nil {
-		return err
+	var (
+		src     io.Reader = bytes.NewReader(data[s.off:end])
+		closers []io.Closer
+	)
+	defer func() {
+		for i := len(closers) - 1; i >= 0; i-- {
+			closers[i].Close()
+		}
+	}()
+	for i := len(s.pipe) - 1; i >= 0; i-- {
+		r, err := Decode(src, s.pipe[i])
+		if err != nil {
+			return err
+		}
+		closers = append(closers, r)
+		src = r
 	}
-	defer r.Close()
 	for _, m := range s.files {
-		if err := writeMember(e.Dest, m, io.LimitReader(r, int64(m.Size))); err != nil {
+		if err := writeMember(e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
 			return err
 		}
 	}

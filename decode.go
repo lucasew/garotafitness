@@ -4,7 +4,9 @@ import (
 	"io"
 
 	"github.com/lucasew/garotafitness/delta"
+	"github.com/lucasew/garotafitness/dispack"
 	"github.com/lucasew/garotafitness/fourx4"
+	"github.com/lucasew/garotafitness/lzma"
 	"github.com/lucasew/garotafitness/magic2"
 	"github.com/lucasew/garotafitness/mpzz"
 	"github.com/lucasew/garotafitness/rzw"
@@ -19,8 +21,12 @@ func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
 	switch a.Algo {
 	case AlgoStoring:
 		return storing.NewReader(r)
+	case AlgoLZMA:
+		return lzma.NewReader(r)
 	case AlgoSREP:
 		return srep.NewReader(r)
+	case AlgoDispack:
+		return dispack.NewReader(r)
 	case AlgoMPZZ:
 		return mpzz.NewReader(r)
 	case AlgoMagic2:

@@ -67,6 +67,33 @@ func TestExtractStoringSolid(t *testing.T) {
 	}
 }
 
+func TestExtractStackedStoring(t *testing.T) {
+	t.Parallel()
+	d, err := OpenDirDest(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("hello")
+	s := solid{
+		pipe: ParsePipeline("storing+storing"),
+		off:  0,
+		csz:  5,
+		files: []Member{
+			{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing+storing")},
+		},
+	}
+	if err := extractSolid(Extractor{Dest: d}, data, s); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(d.Root, "a.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "hello" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestExtractUnknownEncoder(t *testing.T) {
 	t.Parallel()
 	d, err := OpenDirDest(t.TempDir())
