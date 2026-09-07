@@ -55,6 +55,9 @@ const (
 // 8-sym probes. ok is true only when bytes[2895:2901] hash to the
 // steam_appid.txt CRC.
 func decodeBest(src []byte) ([]byte, bool) {
+	if out, ok := decodeWASM(src); ok {
+		return out, true
+	}
 	if out, ok := decodeIIR(src); ok {
 		return out, true
 	}

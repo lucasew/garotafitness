@@ -2,7 +2,9 @@ package magic2
 
 // Static map of official lolz images inside RimWorld setup.exe.
 // INV-03: headers, .text strings, and constant pools only. The PEs
-// are never mapped executable.
+// are never mapped executable. Official C++ was never released;
+// the reconstructed kernel lives in guest/ and compiles to
+// magic2dec.wasm (same wrap as srep: emcc + wazero).
 //
 // setup.exe overlays
 //

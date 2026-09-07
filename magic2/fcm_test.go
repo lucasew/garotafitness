@@ -84,6 +84,9 @@ func TestFG06FCMFirst16(t *testing.T) {
 	src := fg06Payload(t)
 	fmt.Printf("state_be=%08x rest=%x\n", binary.BigEndian.Uint32(src[:4]), src[4:16])
 
+	wasm, wasmok := decodeWASM(src)
+	print16(t, "wasm-guest", wasm, wasmok)
+
 	iir, iirok := decodeIIR(src)
 	print16(t, "iir-nibble", iir, iirok)
 	for _, emit := range []struct {
