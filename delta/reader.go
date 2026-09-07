@@ -8,6 +8,7 @@ package delta
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -17,7 +18,7 @@ const maxElem = 30
 // NewReader unwraps a Delta-preprocessed stream.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
-		return nil, fmt.Errorf("delta: nil reader")
+		return nil, errNilReader
 	}
 	return &reader{src: r}, nil
 }
@@ -71,7 +72,7 @@ func (r *reader) next() ([]byte, error) {
 		return nil, fmt.Errorf("delta: tablesize: %w", err)
 	}
 	if dataSize > 0x7fffffff || tableSize > 0x7fffffff {
-		return nil, fmt.Errorf("delta: block too large")
+		return nil, errTooLarge
 	}
 	skip, err := readExact(r.src, int(tableSize))
 	if err != nil {
@@ -100,12 +101,12 @@ func (r *reader) next() ([]byte, error) {
 			return nil, fmt.Errorf("delta: type %d", t)
 		}
 		if sk < 0 || nr < 0 {
-			return nil, fmt.Errorf("delta: table bounds")
+			return nil, errTable
 		}
 		pos += sk
 		need := n * nr
 		if pos < 0 || pos > len(data) || need < 0 || pos+need > len(data) {
-			return nil, fmt.Errorf("delta: table overruns data")
+			return nil, errTable
 		}
 		tab := data[pos : pos+need]
 		unreorder(n, tab, nr, imm)
@@ -197,8 +198,9 @@ func readExact(r io.Reader, n int) ([]byte, error) {
 	return b, nil
 }
 
-type errString string
-
-func (e errString) Error() string { return string(e) }
-
-const errClosed = errString("delta: closed")
+var (
+	errNilReader = errors.New("delta: nil reader")
+	errTooLarge  = errors.New("delta: block too large")
+	errTable     = errors.New("delta: table overruns data")
+	errClosed    = errors.New("delta: closed")
+)

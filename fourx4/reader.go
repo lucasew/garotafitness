@@ -9,6 +9,7 @@ package fourx4
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -26,10 +27,10 @@ type Inner func(r io.Reader, name, params string) (io.ReadCloser, error)
 // params is the on-disk token after "4x4:", e.g. "b128mb:rzw".
 func NewReader(r io.Reader, params string, inner Inner) (io.ReadCloser, error) {
 	if r == nil {
-		return nil, fmt.Errorf("fourx4: nil reader")
+		return nil, errNilReader
 	}
 	if inner == nil {
-		return nil, fmt.Errorf("fourx4: nil inner")
+		return nil, errNilInner
 	}
 	name, iparams, err := parseInner(params)
 	if err != nil {
@@ -112,7 +113,7 @@ func (r *reader) next() ([]byte, error) {
 	outSize := binary.LittleEndian.Uint32(hdr[0:4])
 	inSize := binary.LittleEndian.Uint32(hdr[4:8])
 	if inSize > 0x7fffffff || (outSize != storedOut && outSize > 0x7fffffff) {
-		return nil, fmt.Errorf("fourx4: block too large")
+		return nil, errTooLarge
 	}
 	in := make([]byte, inSize)
 	if _, err := io.ReadFull(r.src, in); err != nil {
@@ -137,7 +138,7 @@ func (r *reader) next() ([]byte, error) {
 // a token is a 4x4 option when the first or second byte is a digit.
 func parseInner(params string) (name, iparams string, err error) {
 	if params == "" {
-		return "", "", fmt.Errorf("fourx4: missing inner method")
+		return "", "", errNoInner
 	}
 	parts := strings.Split(params, ":")
 	for i, p := range parts {
@@ -146,17 +147,20 @@ func parseInner(params string) (name, iparams string, err error) {
 		}
 		if !is4x4Opt(p) {
 			inner := strings.Join(parts[i:], ":")
-			name, iparams, _ = strings.Cut(inner, ":")
+			name, rest, hasParams := strings.Cut(inner, ":")
 			if name == "" {
-				return "", "", fmt.Errorf("fourx4: missing inner method")
+				return "", "", errNoInner
 			}
-			return name, iparams, nil
+			if !hasParams {
+				rest = ""
+			}
+			return name, rest, nil
 		}
 		if err := skip4x4Opt(p); err != nil {
 			return "", "", err
 		}
 	}
-	return "", "", fmt.Errorf("fourx4: missing inner method")
+	return "", "", errNoInner
 }
 
 func is4x4Opt(p string) bool {
@@ -236,8 +240,10 @@ func parseInt(s string) (uint64, error) {
 	return n, nil
 }
 
-type errString string
-
-func (e errString) Error() string { return string(e) }
-
-const errClosed = errString("fourx4: closed")
+var (
+	errNilReader = errors.New("fourx4: nil reader")
+	errNilInner  = errors.New("fourx4: nil inner")
+	errNoInner   = errors.New("fourx4: missing inner method")
+	errTooLarge  = errors.New("fourx4: block too large")
+	errClosed    = errors.New("fourx4: closed")
+)
