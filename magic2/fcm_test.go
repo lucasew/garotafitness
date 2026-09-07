@@ -64,6 +64,9 @@ func TestFG06FCMFirst16(t *testing.T) {
 	src := fg06Payload(t)
 	fmt.Printf("state_be=%08x rest=%x\n", binary.BigEndian.Uint32(src[:4]), src[4:16])
 
+	iir, iirok := decodeIIR(src)
+	print16(t, "iir-nibble", iir, iirok)
+
 	v22, v22ok := decodeV22(src)
 	print16(t, "v22-bit+nibble", v22, v22ok)
 

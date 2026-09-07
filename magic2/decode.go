@@ -55,6 +55,9 @@ const (
 // 8-sym probes. ok is true only when bytes[2895:2901] hash to the
 // steam_appid.txt CRC.
 func decodeBest(src []byte) ([]byte, bool) {
+	if out, ok := decodeIIR(src); ok {
+		return out, true
+	}
 	if out, ok := decodeV22(src); ok {
 		return out, true
 	}
@@ -80,6 +83,130 @@ func decodeBest(src []byte) ([]byte, bool) {
 		}
 	}
 	return nil, false
+}
+
+// decodeIIR uses the 9×9 IIR-hashed nibble grid (0x14001adb0) and
+// the scale-14 lit/match bit (0=literal).
+func decodeIIR(src []byte) ([]byte, bool) {
+	for _, unsigned := range []bool{false, true} {
+		for _, adapt := range []uint{5, 4} {
+			if out, ok := decodeIIRcfg(src, unsigned, adapt); ok {
+				return out, true
+			}
+		}
+	}
+	return decodeIIRcfg(src, false, 5)
+}
+
+func decodeIIRcfg(src []byte, unsigned bool, bitAdapt uint) ([]byte, bool) {
+	if len(src) < 4 {
+		return nil, false
+	}
+	st := &rANS{buf: src, off: 4, x: binary.BigEndian.Uint32(src[:4])}
+	st.renorm()
+
+	hiGrid := newNibbleGrid()
+	loGrid := newNibbleGrid()
+	var hi, lo iirHist
+	var litP uint16
+	initBit(&litP)
+
+	clsGrid := newNibbleGrid()
+	var clsH iirHist
+	lenTab := make([]uint16, 256*8)
+	for i := 0; i < 256; i++ {
+		initSym8CDF(lenTab[i*8 : i*8+8])
+	}
+	bmTab := make([]uint16, 64)
+	for i := range bmTab {
+		initBit(&bmTab[i])
+	}
+
+	out := make([]byte, 0, wantPlain)
+	prev := byte(0)
+	rep0 := 1
+	reps := []int{1, 1, 1, 1}
+
+	for len(out) < wantPlain {
+		if st.x < ransL && st.off >= len(st.buf) {
+			break
+		}
+		bit, err := st.getBitN(&litP, 14, bitAdapt)
+		if err != nil {
+			break
+		}
+		if bit == 0 {
+			hn, err := st.getNibble(hi.cdf(hiGrid))
+			if err != nil {
+				break
+			}
+			if unsigned {
+				hi.afterNibbleU(hn)
+			} else {
+				hi.afterNibble(hn)
+			}
+			ln, err := st.getNibble(lo.cdf(loGrid))
+			if err != nil {
+				break
+			}
+			if unsigned {
+				lo.afterNibbleU(ln)
+			} else {
+				lo.afterNibble(ln)
+			}
+			b := byte(hn<<4 | ln)
+			out = append(out, b)
+			prev = b
+			continue
+		}
+		if len(out) == 0 {
+			break
+		}
+		cls, err := decodeMatchClass(st, clsH.cdf(clsGrid), adaptNibble)
+		if err != nil || cls < 0 {
+			break
+		}
+		clsH.afterNibble(cls & 0xf)
+		extra := 0
+		if !isRep0(cls) {
+			nb := newOffsetBits(cls)
+			if nb > 0 {
+				for i := 0; i < nb && i < 18; i++ {
+					b, err := st.getBit(&bmTab[i%len(bmTab)])
+					if err != nil {
+						return out, false
+					}
+					extra = extra<<1 | b
+				}
+			} else if cls == 1 || cls == 2 || cls == 3 || cls == 11 {
+				d, err := st.getNibble(hi.cdf(hiGrid))
+				if err != nil {
+					break
+				}
+				extra = d + 1
+			}
+		}
+		decodeOff(cls, extra, &rep0, reps)
+		n, err := decodeLen(st, lenTab[(int(prev)%256)*8:(int(prev)%256)*8+8], adaptSym8)
+		if err != nil || n <= 0 || rep0 <= 0 || rep0 > len(out) {
+			break
+		}
+		for i := 0; i < n && len(out) < wantPlain; i++ {
+			b := out[len(out)-rep0]
+			out = append(out, b)
+			prev = b
+		}
+	}
+	if len(out) < emuSize+appidSize {
+		return out, false
+	}
+	if crc32.ChecksumIEEE(out[emuSize:emuSize+appidSize]) != appidCRC {
+		return out, false
+	}
+	if len(out) > wantPlain {
+		out = out[:wantPlain]
+	}
+	return out, true
 }
 
 // decodeFCM is the v22c4b path using PE getBit (scale 14, >>4) and
