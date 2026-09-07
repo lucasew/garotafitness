@@ -17,7 +17,8 @@ const (
 type Volume struct {
 	Name     string
 	Optional bool
-	Encoders []string
+	Algos    []Algo
+	Members  []Member
 }
 
 func listVolumes(src fs.FS) ([]Volume, error) {
@@ -57,34 +58,5 @@ func inspectVolume(src fs.FS, name string) (Volume, error) {
 	return Volume{
 		Name:     name,
 		Optional: strings.Contains(strings.ToLower(path.Base(name)), optionalMark),
-		Encoders: encoderNames(head),
 	}, nil
-}
-
-func encoderNames(head []byte) []string {
-	var found []string
-	for _, name := range []string{"storing", "srep", "lzma", "lzma2", "rep", "ppmd"} {
-		if hasEncoderToken(head, name) {
-			found = append(found, name)
-		}
-	}
-	return found
-}
-
-func hasEncoderToken(head []byte, name string) bool {
-	lower := strings.ToLower(string(head))
-	needle := name
-	for i := 0; i+len(needle) <= len(lower); i++ {
-		if lower[i:i+len(needle)] != needle {
-			continue
-		}
-		if i > 0 {
-			c := lower[i-1]
-			if c >= 'a' && c <= 'z' {
-				continue
-			}
-		}
-		return true
-	}
-	return false
 }

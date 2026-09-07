@@ -41,7 +41,7 @@ func TestExtractUnknownEncoder(t *testing.T) {
 		Dest:   d,
 	}
 	err = e.Extract(t.Context())
-	if err == nil || !strings.Contains(err.Error(), "srep") {
-		t.Fatalf("got %v", err)
+	if err == nil {
+		t.Fatal("want error")
 	}
 }

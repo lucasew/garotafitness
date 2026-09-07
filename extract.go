@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
-	"slices"
 )
 
 // Extractor reads Source and writes Dest.
@@ -42,10 +41,23 @@ func (e Extractor) Extract(ctx context.Context) error {
 }
 
 func extractVolume(ctx context.Context, e Extractor, v Volume) error {
-	_ = ctx
-	_ = e
-	if slices.Contains(v.Encoders, "srep") {
-		return fmt.Errorf("unknown encoder srep")
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return fmt.Errorf("unknown encoder: volume %s needs a guest", v.Name)
+	f, err := e.Source.Open(v.Name)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", v.Name, err)
+	}
+	defer f.Close()
+	parsed, err := readVolume(f, v.Name)
+	if err != nil {
+		return err
+	}
+	for _, m := range parsed.Members {
+		if m.Dir {
+			continue
+		}
+		return unknownEncoderError(m.Pipeline.Last())
+	}
+	return fmt.Errorf("unknown encoder: volume %s has no members", v.Name)
 }

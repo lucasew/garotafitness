@@ -74,7 +74,9 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | Write tree | Dest | output fs, out-dir, target |
 | One `fg-*.bin` | Volume | bin, archive, arc, part |
 | One file inside a Volume | Member | entry, item, archived file |
-| One decompressor | Encoder | codec, compressor, method, filter |
+| One decompressor | Algo | Encoder, codec, compressor, method, filter |
+| One pipeline step | Atom | stage, filter step |
+| Decompress chain | Pipeline | method string |
 | WASM module | Guest | wasm, plugin, runtime module |
 | Composition root | Extractor | service, engine, manager |
 | Installer file | `setup.exe` | Inno, wizard |
@@ -91,8 +93,11 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | Source | yes (`fs.FS`) | value | no | Nil: Extract returns error | Write through Source |
 | Dest | yes | value. Write port: MkdirAll, Create | yes | Nil: Extract returns error | Treat Dest as `fs.FS` |
 | Volume | yes | identity = Source path of one `fg-*.bin` | no | Not `ArC\x01`: open returns error | Exec the file |
-| Member | no | value. Path relative to Dest plus size | no | Escape of Dest: skip write, fail Extract | Use the raw path |
-| Encoder | yes (one package) | value. Name string | no | Unknown name: Extract returns error | Load a PE or DLL for that name |
+| Member | yes | value. Path, Pipeline, size | no | Escape of Dest: skip write, fail Extract | Use the raw path |
+| Algo | yes | enum. Zero is invalid | no | Parse unknown name: AlgoInvalid | Treat Invalid as implemented |
+| Atom | yes | value. Algo plus params | no | Unknown Algo: Extract returns error | Load a PE or DLL for that Algo |
+| Pipeline | yes | value. Ordered Atoms, last first | no | Empty on a file Member: Extract returns error | Reorder atoms |
+| BlockKind | yes | enum. Zero is invalid | no | Unknown kind: parse returns error | |
 | Guest | no | identity = one wasm module | runtime instance | Instantiation fail: Extract returns error | Start a process for the Guest |
 
 ### CLI
@@ -110,7 +115,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | INV-03 | No PE or DLL from Source runs | Extractor | LoadLibrary, mmap-exec, Wine |
 | INV-04 | No child process starts | Extractor | `os/exec`, Guest `proc_exec` |
 | INV-05 | Exit 0 means every required Volume finished | `extract` | exit 0 after a partial Dest |
-| INV-06 | One Encoder name maps to one package | Encoder | a second implementation of the same name |
+| INV-06 | One Algo maps to one package | Algo | a second implementation of the same Algo |
 | INV-07 | `setup.exe` is data | TEC-04 | call a function inside that image |
 | INV-08 | A missing optional Volume is not a failure | Volume | require `fg-optional-*` |
 
@@ -126,7 +131,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | Extractor.Extract | nil Dest | return error. CLI slog and exit 1 |
 | Extractor.Extract | cancelled context | return error. CLI slog and exit 1 |
 | Volume open | magic is not `ArC\x01` | return error. CLI slog and exit 1 |
-| Encoder lookup | no package and no Guest for that name | slog the Encoder name. return error. exit 1 |
+| Encoder lookup | Atom.Algo is Invalid or has no Guest | slog the Atom. return error. exit 1 |
 | Member write | path leaves Dest | slog the path. no write outside Dest. return error. exit 1 |
 | Guest run | WASM trap, WASI fail, I/O fail | slog. return error. exit 1 |
 
