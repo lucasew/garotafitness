@@ -171,6 +171,22 @@ package magic2
 //	(slots 0..3, 17, 18), not extra bits (0x140039dd0).
 //	Length 8-sym at +0x3ffea, add 0x100+bsf, adapt >>7 / 0x2f20.
 //	Class 1 new offset: two 8-sym, rbp = s1 + s0*8, insert at +0x44.
+//	  s0 CDF model+hist*18+0x1c560, adapt >>6 toward 0x1400011a0.
+//	  s1 CDF model+hist*288+(prev>=10?144:0)+s0*18+0x1ca82,
+//	  adapt >>7 toward 0x140002f20.
+//	  lea rbp,[rcx+rbp*8] (0-based). Next 5 bytes f9 99 03 00 00
+//	  desync llvm-objdump; the ldmf twin at 0x14003626f is mov edi,2
+//	  so length is the immediate 2. Store: movdqu [+0x44]->[+0x48],
+//	  movl ebp,[+0x44] (reps[17]).
+//	Class 2/3 new offset: call 0x140073fc9 / 0x14007396f (past
+//	  .text VSz). x86 twins 0x45ed6f / 0x45e660 are also past.
+//	  Same shape as in-image 0x140036b00: 16-sym slot (escape 15),
+//	  then nbits extra scale-14 >>5 bits. offset=(1<<nbits)+extra.
+//	  cls2 model+0x225c2; cls3 model+0x313e6.
+//	  cls2 length: binary at +0x21ca2+(bsr(off)+1 & ~3), +3.
+//	  cls3 length: helper + 5.
+//	Class 10: 16-sym at +0x364ca, then a697[sym] as rep index
+//	  ({4,5,6,7,8,9,10,11,12,13,14,15,16,19,20,21}).
 //	Literal @ 0x14002b7e9 mixes two 16-sym CDFs (row stride 34):
 //	hi A model+(hist*17<<7)+(prev>>blr)*34
 //	hi B model+(hist*17<<9)+(prev>>blo)*34+0x26c80

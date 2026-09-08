@@ -77,6 +77,20 @@ static const uint16_t kSym8Tgt[7][8] = {
 };
 
 static const int kA690[7] = {0, 1, 2, 3, 17, 18, 0};
+// VA 0x14000a697. cls10: edx = table[sym] after the +0x364ca 16-sym.
+static const int kA697[16] = {4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21};
+
+// VA 0x1400011a0. cls1 first 8-sym adapt (psraw $6) at 0x14003a24d.
+static const uint16_t kOff8Tgt[8][8] = {
+    {0x0000, 0x8007, 0x800f, 0x8017, 0x801f, 0x8027, 0x802f, 0x8037},
+    {0x0000, 0x0008, 0x800f, 0x8017, 0x801f, 0x8027, 0x802f, 0x8037},
+    {0x0000, 0x0008, 0x0010, 0x8017, 0x801f, 0x8027, 0x802f, 0x8037},
+    {0x0000, 0x0008, 0x0010, 0x0018, 0x801f, 0x8027, 0x802f, 0x8037},
+    {0x0000, 0x0008, 0x0010, 0x0018, 0x0020, 0x8027, 0x802f, 0x8037},
+    {0x0000, 0x0008, 0x0010, 0x0018, 0x0020, 0x0028, 0x802f, 0x8037},
+    {0x0000, 0x0008, 0x0010, 0x0018, 0x0020, 0x0028, 0x0030, 0x8037},
+    {0x0000, 0x0008, 0x0010, 0x0018, 0x0020, 0x0028, 0x0030, 0x0038},
+};
 
 // VA 0x140002980. Option-header 16-sym adapt (psraw $5) at 0x14003b132.
 static const uint16_t kHdrTgt[16][16] = {
@@ -219,8 +233,7 @@ static int get_bit(Rans *r, uint16_t *p0, unsigned nbits, unsigned shift) {
   if (!r->ok) return -1;
   uint32_t m = 1u << nbits;
   uint32_t p = *p0;
-  if (p == 0) p = 1;
-  if (p >= m) p = m - 1;
+  if (p >= m && p != 0) p = m - 1;
   uint32_t slot = r->x & (m - 1);
   uint32_t quo = r->x >> nbits;
   if (slot < p) {
@@ -316,8 +329,8 @@ static int get_nibble(Rans *r, uint16_t *cdf, int last, int shift, const uint16_
   return sym;
 }
 
-// 8-sym length at 0x140039f08: add 0x100+bsf, adapt >>7 toward 0x2f20.
-static int get_sym8(Rans *r, uint16_t *cdf) {
+// 8-sym find: add 0x100+bsf. Length uses >>7/0x2f20; cls1 s0 uses >>6/0x11a0.
+static int get_sym8_tgt(Rans *r, uint16_t *cdf, const uint16_t tgt[][8], int shift) {
   if (!r->ok) return -1;
   uint32_t slot = r->x & (kMN - 1);
   uint32_t quo = r->x >> 15;
@@ -327,9 +340,37 @@ static int get_sym8(Rans *r, uint16_t *cdf) {
   if (end <= start) end = start + 1;
   r->x = (end - start) * quo + (slot - start);
   int sym = i - 1;
-  adapt8(cdf, sym, kLen8Tgt, 7);
+  adapt8(cdf, sym, tgt, shift);
   renorm(r);
   return sym;
+}
+
+static int get_sym8(Rans *r, uint16_t *cdf) { return get_sym8_tgt(r, cdf, kLen8Tgt, 7); }
+
+// cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
+// x86 twins 0x45ed6f / 0x45e660 are also past .text; same shape as the
+// in-image integer decoder at 0x140036b00: 16-sym slot, escape 15, then
+// that many extra scale-14 bits. offset = (1<<nbits)+extra (min 1).
+static int decode_new_off(Rans *r, uint16_t *cdf, uint16_t *cdf_esc, uint16_t *bits, int nbit) {
+  int s = get_nibble(r, cdf, 16, 6, kMatchTgt);
+  if (s < 0) return -1;
+  int nbits = s;
+  if (s == 15) {
+    int s2 = get_nibble(r, cdf_esc, 16, 6, kMatchTgt);
+    if (s2 < 0) return -1;
+    nbits = 15 + s2;
+  }
+  if (nbits > 24) nbits = 24;
+  uint32_t extra = 0;
+  for (int i = 0; i < nbits; i++) {
+    int b = get_bit(r, &bits[(i + nbit) & 4095], 14, 5);
+    if (b < 0) return -1;
+    extra = (extra << 1) | (uint32_t)b;
+  }
+  if (nbits <= 0) return 1;
+  int d = (int)((1u << nbits) + extra);
+  if (d < 1) d = 1;
+  return d;
 }
 
 static int bitlen(uint32_t x) {
@@ -420,15 +461,26 @@ static int extra_sample(Rans *r, Hist *h, uint16_t *bits, int bsf, int h1) {
   return r10;
 }
 
+// Insert a new distance at reps[17] (obj+0x44). PE: movdqu [+0x44]→[+0x48],
+// then movl at +0x44 (cls1 0x14003a356 / x86 cls3 falls into 0x42f710).
+static void insert_new_off(int *reps, int nrep, int d) {
+  if (nrep > 20) reps[20] = reps[19];
+  if (nrep > 19) reps[19] = reps[18];
+  if (nrep > 18) reps[18] = reps[17];
+  if (nrep > 17) reps[17] = d;
+}
+
 // 0x140039dd0: a690[cls-4] is an index into the recent-offset array
 // (0..3, 17, 18), not a raw bit count. Rotate that slot to [0].
+// cls1/2/3 insert at +0x44 (index 17) and return the new distance.
 static int decode_off(int cls, int extra, int *rep0, int *reps, int nrep) {
   if (cls == 0) {
     if (*rep0 < 1) *rep0 = 1;
     return *rep0;
   }
   if (cls >= 4 && cls <= 10) {
-    int idx = (cls == 10) ? extra : kA690[cls - 4];
+    int idx = extra;
+    if (cls != 10) idx = kA690[cls - 4];
     if (idx >= 0 && idx < nrep) {
       int d = reps[idx];
       if (idx > 0) {
@@ -442,8 +494,7 @@ static int decode_off(int cls, int extra, int *rep0, int *reps, int nrep) {
   }
   int d = extra;
   if (d < 1) d = 1;
-  for (int i = nrep - 1; i > 0; i--) reps[i] = reps[i - 1];
-  reps[0] = d;
+  insert_new_off(reps, nrep, d);
   *rep0 = d;
   return d;
 }
@@ -590,6 +641,11 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   // class CDF stride 34 bytes = 17 u16 (0x140039b3a hist*544+esi*34)
   static uint16_t clsTab[256 * 17];
   static uint16_t lenTab[256 * 8];
+  static uint16_t off8a[32 * 8];
+  static uint16_t off8b[32 * 8];
+  static uint16_t off2Tab[32 * 16];
+  static uint16_t off3Tab[32 * 16];
+  static uint16_t offBits[4096];
   static uint16_t bmTab[64];
   static uint16_t wHi[16];
   static uint16_t wLo[16];
@@ -602,6 +658,13 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     clsTab[i * 17 + 16] = 0x8000;
   }
   for (int i = 0; i < nLen; i++) init_sym8(lenTab + i * 8);
+  for (int i = 0; i < 32; i++) {
+    init_sym8(off8a + i * 8);
+    init_sym8(off8b + i * 8);
+    init_nibble(off2Tab + i * 16);
+    init_nibble(off3Tab + i * 16);
+  }
+  for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
   for (int i = 0; i < 16; i++) wHi[i] = 0x8000;
   for (int i = 0; i < 16; i++) wLo[i] = 0x8000;
@@ -676,28 +739,44 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     }
     int extra = 0;
     if (cls == 1) {
-      // two 8-sym then rbp = s1 + s0*8, stored at reps[17] (0x14003a336)
-      int s0 = get_sym8(&r, lenTab + (hist % nLen) * 8);
+      // s0 at +0x1c560 adapt >>6 / 0x11a0; s1 at +0x1ca82 >>7 / 0x2f20
+      // lea rbp,[rcx+rbp*8] (0-based == x86 lea ebx,[eax+edx*8-9])
+      // bytes after that lea: f9 99 03 00 00 (objdump desyncs); twin
+      // 0x14003626f is mov edi,2 so length is the immediate 2.
+      int arow = hist % 32;
+      int s0 = get_sym8_tgt(&r, off8a + arow * 8, kOff8Tgt, 6);
       if (s0 < 0) break;
-      int s1 = get_sym8(&r, lenTab + ((hist * 16 + s0) % nLen) * 8);
+      int brow = ((prev >= 10 ? 8 : 0) + s0) % 32;
+      int s1 = get_sym8_tgt(&r, off8b + brow * 8, kLen8Tgt, 7);
       if (s1 < 0) break;
       extra = s1 + s0 * 8;
-      if (extra < 1) extra = 1;
-    } else if (cls == 2 || cls == 3 || cls == 11) {
-      int d = get_nibble(&r, hiA + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
-      if (d < 0) break;
-      extra = d + 1;
-    } else if (cls == 10) {
-      extra = get_nibble(&r, clsTab + crow * 17, 16, 6, kMatchTgt);
+    } else if (cls == 2) {
+      extra = decode_new_off(&r, off2Tab, off2Tab + 16, offBits, hist * 16);
       if (extra < 0) break;
+    } else if (cls == 3) {
+      extra = decode_new_off(&r, off3Tab, off3Tab + 16, offBits + 2048, hist * 16);
+      if (extra < 0) break;
+    } else if (cls == 11) {
+      extra = decode_new_off(&r, off3Tab + 16, off3Tab, offBits + 1024, esi);
+      if (extra < 0) break;
+    } else if (cls == 10) {
+      int s = get_nibble(&r, clsTab + crow * 17, 16, 6, kMatchTgt);
+      if (s < 0) break;
+      extra = kA697[s & 15];
     }
     decode_off(cls, extra, &rep0, reps, 32);
     int m;
     if (cls == 0) {
       // 0x14003a396: class 0 length is the immediate 1, no 8-sym.
       m = 1;
+    } else if (cls == 1) {
+      m = 2;
     } else if (cls == 2) {
-      int b = get_bit(&r, &bmTab[rep0lit % nBM], 14, 4);
+      // p0 at +0x21ca2 + (bsr(off)+1 & ~3) + hist*32 + (r13==0?2:0)
+      // scale 14 adapt >>5 (0x14003a121).
+      int bl = bitlen((uint32_t)rep0) & ~3;
+      int bctx = (bl + (prev == 0 ? 2 : 0)) % nBM;
+      int b = get_bit(&r, &bmTab[bctx], 14, 5);
       if (b < 0) break;
       m = 3 + b;
     } else {
