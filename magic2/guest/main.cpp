@@ -422,17 +422,27 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
                           uint16_t *bp, const uint8_t *nbtab, int ntab, uint16_t *mid, uint16_t *tail) {
 #ifdef HOST_DEBUG
   static int nmix;
-  if (nmix < 4) {
+  if (nmix < 6) {
     fprintf(stderr, "newoff-mix slot=%04x x=%08x w=%04x\n", r->x & 0x7fff, r->x, (unsigned)*wp);
     nmix++;
   }
 #endif
   int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
+#ifdef HOST_DEBUG
+  static int npost;
+  if (npost < 6) {
+    fprintf(stderr, "newoff-s s=%d x=%08x slot=%04x\n", s, r->x, r->x & 0x7fff);
+    npost++;
+  }
+#endif
   if (s < 0) return -1;
   if (s == 15) {
     int sx = get_nibble(r, esc, 16, 5, kHdrTgt);
     if (sx < 0) return -1;
     s = 15 + sx;
+#ifdef HOST_DEBUG
+    if (npost <= 6) fprintf(stderr, "newoff-esc s=%d x=%08x\n", s, r->x);
+#endif
   }
   if (s < 0) s = 0;
   if (s >= ntab) s = ntab - 1;
@@ -461,6 +471,13 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
   // 0x140036dbf: 16-sym at cdf+s*34+0x4a4, adapt >>6 / 0x1f00.
   int s2 = get_nibble(r, mid + s * 16, 16, 6, kMatchTgt);
   if (s2 < 0) return -1;
+#ifdef HOST_DEBUG
+  static int ns2;
+  if (ns2 < 4) {
+    fprintf(stderr, "newoff-s2 s2=%d x=%08x slot=%04x\n", s2, r->x, r->x & 0x7fff);
+    ns2++;
+  }
+#endif
   int sh = ((nbits < 9 ? 9 : nbits) + 60) & 63;
   d += s2 << sh;
   if (nbits > 9) {
@@ -945,7 +962,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
 #ifdef HOST_DEBUG
-      if (n < 40) fprintf(stderr, "lit n=%d b=%02x hi=%d lo=%d x=%08x slot=%04x esi=%d\n", n, b, hi, lo, r.x, r.x & 0x7fff, esi);
+      if (n < 70) fprintf(stderr, "lit n=%d b=%02x hi=%d lo=%d x=%08x slot=%04x esi=%d\n", n, b, hi, lo, r.x, r.x & 0x7fff, esi);
 #endif
       dst[n] = b;
       rolz_push(prev, n);
@@ -966,11 +983,11 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     int crow = esi * 16 + hist;
     if (crow >= nCls) crow = nCls - 1;
 #ifdef HOST_DEBUG
-    if (n < 40) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
+    if (n < 70) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
 #endif
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
 #ifdef HOST_DEBUG
-    if (n < 40) fprintf(stderr, "post-cls n=%d cls=%d x=%08x slot=%04x\n", n, cls, r.x, r.x & 0x7fff);
+    if (n < 70) fprintf(stderr, "post-cls n=%d cls=%d x=%08x slot=%04x\n", n, cls, r.x, r.x & 0x7fff);
 #endif
     // PE 0x140039bf9: cmp r15, 0xb / ja 0x14003a3a0 — cls 12-15 are
     // reps[cls-12] with rotate and immediate length 2, not an error.
