@@ -395,7 +395,8 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
   if (nbits > 24) nbits = 24;
   int d = be0_base(nbtab, ntab, s);
   if (nbits <= 5) {
-    // 0x140036db8: xor esi; jmp past-image helper. Treat as nbits raw bits.
+    // 0x140036db8: xor esi; jmp past-image helper. Treat as nbits raw bits,
+    // then the in-image tail at 0x140036f15 (16-sym + bit).
     uint32_t extra = 0;
     for (int i = 0; i < nbits; i++) {
       int b = get_bit(r, &bits[(i + nbit) & 4095], 14, 5);
@@ -403,6 +404,11 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
       extra = (extra << 1) | (uint32_t)b;
     }
     d += (int)extra;
+    int s3 = get_nibble(r, tail, 16, 7, kNibbleTgt);
+    if (s3 < 0) return -1;
+    int bit = get_bit(r, &bits[(nbit + 16) & 4095], 14, 5);
+    if (bit < 0) return -1;
+    d += 2 * s3 + bit;
   } else {
     // 0x140036dbf: 16-sym at +0x4a4, adapt >>6 / 0x1f00.
     int s2 = get_nibble(r, mid, 16, 6, kMatchTgt);
