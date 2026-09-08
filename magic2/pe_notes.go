@@ -200,7 +200,20 @@ package magic2
 //	  nbits>5: s2<<max(nbits,9)-4, raw<<(5) if nbits>9,
 //	  then s3 16-sym + bit; offset=rdi+2*s3+bit. No +1.
 //	  cls2 length: binary at +0x21ca2+(bsr(off)+1 & ~3), +3.
-//	  cls3 length: helper + 5.
+//	  cls3 length: 0x14006f962 / add $5. A at +0x276a6+
+//	  (hist==0)*34+(bsr>>2)*68, B at +0x311c6+(bsr>>2)*34.
+//	  Same mix16+esc helper as the length-8 escape; not 8-sym+5.
+//	Length 8-sym packed row is esi*32+hist*2+(idx!=0), not esi*16.
+//	Length escape 0x140039f8e: cmp $0xa / call 0x14006f8ad / add $0xa.
+//	  In-image clone 0x140035ebc → 0x14006b781 (same rel32).
+//	  A = +0x4a42a + esi*17<<9 + hist*34 + (idx!=0)*544
+//	  B = +0xe562a + (idx!=0)*34. Init uniform i*0x800
+//	  (0x14003e612 / 0x14003e662). Caller writes only the 5th
+//	  arg (B pointer), so this is mix16 + escape-15, not a6e7
+//	  nbits (that floods and cannot hit the 6-byte CRC).
+//	  First fg-06 escape: slot 0x7a03 → 15, esc slot 0x4a03 → 9,
+//	  extra 24, m=34. Without the esc-15 arm, first cls11 is at
+//	  n=41; with it, n=63. c34=0 cannot emit cls11.
 //	Class 10: 16-sym at +0x364ca, then a697[sym] as rep index
 //	  ({4,5,6,7,8,9,10,11,12,13,14,15,16,19,20,21}).
 //	Literal @ 0x14002b7e9 mixes two 16-sym CDFs (row stride 34):

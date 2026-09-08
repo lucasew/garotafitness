@@ -396,6 +396,26 @@ static int decode_bc0(Rans *r, uint16_t *cdf8, uint16_t *bits) {
   return d;
 }
 
+// 0x14006f8ad / in-image clone call 0x14006b781. Same rel32 as cls11's
+// 0x14006f513. Mixed 16-sym (A at +0x4a42a, B at +0xe562a), adapt >>5 /
+// 0x2980, escape 15 is a plain 16-sym at A+0x22 (decode_int 0x140036cd3).
+// Caller only writes the 5th arg (B pointer), not the 6th lookback, so
+// this is not the a6e7 nbits tail — return is the symbol, then +10.
+static int decode_mix16_esc(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc) {
+  int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
+  if (s < 0) return -1;
+#ifndef LENESC_NO15
+  if (s == 15) {
+    int sx = get_nibble(r, esc, 16, 5, kHdrTgt);
+    if (sx < 0) return -1;
+    s = 15 + sx;
+  }
+#else
+  (void)esc;
+#endif
+  return s;
+}
+
 // cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
 // In-image twin 0x140036b00: mixed 16-sym, adapt >>5 / 0x2980, escape 15.
 static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
@@ -777,14 +797,14 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       r.off += 4;
     }
   }
-  const int nHi = 16384, nCls = 256, nLen = 256, nBM = 64;
+  const int nHi = 16384, nCls = 256, nLen = 8192, nBM = 64;
   static uint16_t hiA[16 * 16];
   static uint16_t hiB[256 * 16];
   static uint16_t loA[32 * 16];
   static uint16_t loB[256 * 16];
   // Packed 16-wide. PE model stride 34 is padding, not our row pitch.
   static uint16_t clsTab[256 * 16];
-  static uint16_t lenTab[256 * 8];
+  static uint16_t lenTab[8192 * 8];
   static uint16_t off8a[32 * 8];
   static uint16_t off8b[32 * 8];
   static uint16_t off2A[16];
@@ -800,6 +820,14 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t off11s0[8], off11s1[8];
   static uint16_t cls10Tab[16];
   static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
+  // Length escape 0x14006f8ad: A row esi*256+hist+flag*16 into +0x4a42a,
+  // B row flag into +0xe562a (init 0x14003e612 / 0x14003e662, uniform).
+  static uint16_t escA[256][16], escAe[256][16];
+  static uint16_t escB[2][16], escBe[2][16];
+  static uint16_t escW[256];
+  // cls3 length 0x14006f962: A +0x276a6+(hist==0)*34+(bsr>>2)*68,
+  // B +0x311c6+(bsr>>2)*34, then +5.
+  static uint16_t c3A[16][2][16], c3Ae[16][2][16], c3B[16][16], c3W[16][2];
   static uint16_t offBits[4096];
   static uint16_t bmTab[64];
   // PE hi w: +0xc1e80 + (prev>>bm)*0x920 + hist*32 + esi*2
@@ -844,6 +872,23 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   init_sym8(off11s1);
   init_nibble(cls10Tab);
   offW2 = offW3 = offW11 = 0x8000;
+  for (int i = 0; i < 256; i++) {
+    init_nibble(escA[i]);
+    init_nibble(escAe[i]);
+    escW[i] = 0x8000;
+  }
+  for (int i = 0; i < 2; i++) {
+    init_nibble(escB[i]);
+    init_nibble(escBe[i]);
+  }
+  for (int i = 0; i < 16; i++) {
+    init_nibble(c3B[i]);
+    for (int j = 0; j < 2; j++) {
+      init_nibble(c3A[i][j]);
+      init_nibble(c3Ae[i][j]);
+      c3W[i][j] = 0x8000;
+    }
+  }
   for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
   for (int i = 0; i < 16 * 32; i++) wHi[i] = 0x8000;
@@ -992,33 +1037,54 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       int b = get_bit(&r, &bmTab[bctx], 14, 5);
       if (b < 0) break;
       m = 3 + b;
+    } else if (cls == 3) {
+      // 0x14003a09d: call 0x14006f962 / add $5. Same mix16+esc as
+      // length-escape; A/B rows from bsr(off)>>2 and hist==0.
+      int h0 = hist == 0 ? 1 : 0;
+      int bl = bitlen((uint32_t)dist) >> 2;
+      if (bl < 0) bl = 0;
+      if (bl > 15) bl = 15;
+      int en = decode_mix16_esc(&r, c3A[bl][h0], c3B[bl], &c3W[bl][h0], c3Ae[bl][h0]);
+      if (en < 0) break;
+      m = 5 + en;
+#ifdef HOST_DEBUG
+      if (n < 80) fprintf(stderr, "cls3len n=%d en=%d m=%d bl=%d x=%08x\n", n, en, m, bl, r.x);
+#endif
     } else {
       // 0x140039ec8: esi*576 + hist*36 + (idx!=0)*18 + 0x3ffea
-      int lrow = esi * 16 + hist;
-      if (cls >= 5 && cls <= 10) lrow += 1;
+      // packed 8-wide: esi*32 + hist*2 + flag.
+      int idxflag = 0;
+      if (cls >= 4 && cls <= 9) idxflag = kA690[cls - 4] != 0;
+      else if (cls == 10) idxflag = extra != 0;
+      else idxflag = extra != 0;
+      int lrow = esi * 32 + hist * 2 + idxflag;
       if (lrow >= nLen) lrow = nLen - 1;
       int ln = get_sym8(&r, lenTab + lrow * 8);
       if (ln < 0) break;
       m = ln + 3;
-      if (cls == 3) m = ln + 5;
-      if (cls == 11) m = ln + 2;
 #ifdef HOST_DEBUG
       if (n < 40) fprintf(stderr, "len8 n=%d ln=%d m=%d x=%08x slot=%04x lrow=%d\n", n, ln, m, r.x, r.x & 0x7fff, lrow);
 #endif
       if (m == 10) {
         // 0x140039f8e: cmp $0xa / call 0x14006f8ad / add $0xa.
-        // Past-image; 8-sym +0xbc0 sibling keeps extra small enough
-        // that the first escape does not flood the appid window.
-        int en = decode_bc0(&r, off11s0, off11Bp);
+        // flag = seta after test rdx (a690 idx / new-off), *544 / *34.
+        int idxflag = 0;
+        if (cls >= 4 && cls <= 9) idxflag = kA690[cls - 4] != 0;
+        else if (cls == 10) idxflag = extra != 0;
+        else idxflag = extra != 0;
+        int arow = ((esi & 127) << 1) | (idxflag ? 1 : 0);
+        int brow = idxflag ? 1 : 0;
+        int en = decode_mix16_esc(&r, escA[arow], escB[brow], &escW[arow], escAe[arow]);
         if (en < 0) break;
         m = 10 + en;
 #ifdef HOST_DEBUG
-        fprintf(stderr, "lenesc n=%d en=%d m=%d x=%08x\n", n, en, m, r.x);
+        fprintf(stderr, "lenesc n=%d en=%d m=%d x=%08x arow=%d brow=%d\n", n, en, m, r.x, arow, brow);
 #endif
       }
     }
 #ifdef HOST_DEBUG
-    if (n < 40) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
+    if (n < 200 || cls == 11)
+      fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
 #endif
     if (m <= 0 || dist < 0) {
 #ifdef HOST_DEBUG
@@ -1035,6 +1101,12 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       }
     }
 #endif
+#ifdef HOST_DEBUG
+    if (n < kEmu && n + m >= kEmu) {
+      fprintf(stderr, "cover2895 n=%d cls=%d m=%d dist=%d prev=%02x x=%08x\n", n, cls, m, dist,
+              prev & 255, r.x);
+    }
+#endif
     // PE dict is VirtualAlloc zeros: dist>n copies 0 (same as pos==0 wrap).
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
       uint8_t b = (dist > 0 && dist <= n) ? dst[n - dist] : 0;
@@ -1049,6 +1121,13 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   }
 #ifdef HOST_DEBUG
   fprintf(stderr, "end n=%d x=%08x off=%d ok=%d\n", n, r.x, r.off, (int)r.ok);
+  if (n > kEmu + 8) {
+    fprintf(stderr, "around2895=");
+    int a = kEmu - 16;
+    if (a < 0) a = 0;
+    for (int i = a; i < kEmu + 16 && i < n; i++) fprintf(stderr, "%02x", dst[i]);
+    fprintf(stderr, "\n");
+  }
 #endif
   return n;
 }
