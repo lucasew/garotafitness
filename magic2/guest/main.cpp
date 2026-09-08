@@ -924,6 +924,9 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     if (n < 40) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
 #endif
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
+#ifdef HOST_DEBUG
+    if (n < 40) fprintf(stderr, "post-cls n=%d cls=%d x=%08x slot=%04x\n", n, cls, r.x, r.x & 0x7fff);
+#endif
     // PE 0x140039bf9: cmp r15, 0xb / ja 0x14003a3a0 — cls 12-15 are
     // reps[cls-12] with rotate and immediate length 2, not an error.
     if (cls < 0 || cls > 15) {
@@ -999,10 +1002,19 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       m = ln + 3;
       if (cls == 3) m = ln + 5;
       if (cls == 11) m = ln + 2;
+#ifdef HOST_DEBUG
+      if (n < 40) fprintf(stderr, "len8 n=%d ln=%d m=%d x=%08x slot=%04x lrow=%d\n", n, ln, m, r.x, r.x & 0x7fff, lrow);
+#endif
       if (m == 10) {
-        int en = get_sym8(&r, lenTab + lrow * 8);
+        // 0x140039f8e: cmp $0xa / call 0x14006f8ad / add $0xa.
+        // Past-image; 8-sym +0xbc0 sibling keeps extra small enough
+        // that the first escape does not flood the appid window.
+        int en = decode_bc0(&r, off11s0, off11Bp);
         if (en < 0) break;
         m = 10 + en;
+#ifdef HOST_DEBUG
+        fprintf(stderr, "lenesc n=%d en=%d m=%d x=%08x\n", n, en, m, r.x);
+#endif
       }
     }
 #ifdef HOST_DEBUG
