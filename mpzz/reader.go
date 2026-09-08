@@ -26,7 +26,8 @@ const (
 // Official decode is PE: arc.ini unpackcmd oggre_dec.exe, installer
 // file cls-mpzz.dll (export name CLS-OGGRE.dll). That image is a
 // VirtualAlloc LZMA stub (lc=3,lp=0,pb=2) over the real CLS. INV-03
-// forbids running it. No public C/C++ of OGGRE v0.1.1 exists.
+// forbids running it. The guest is a mechanical RetDec transcription
+// of ClsMain/decode (CLS-OGGRE.c) compiled to wasm.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
@@ -65,19 +66,54 @@ func parseHeader(r io.Reader) (header, error) {
 type reader struct {
 	src io.Reader
 	hdr header
+	buf []byte
+	off int
 	err error
+	eof bool
 }
 
-func (r *reader) Read([]byte) (int, error) {
-	if r.err != nil {
+func (r *reader) Read(p []byte) (int, error) {
+	if r.err != nil && r.off >= len(r.buf) {
 		return 0, r.err
 	}
-	r.err = fmt.Errorf("mpzz: v%d flags %#x: %w", r.hdr.ver, r.hdr.flags, errCodec)
-	return 0, r.err
+	if r.off >= len(r.buf) {
+		if r.eof {
+			return 0, io.EOF
+		}
+		if err := r.fill(); err != nil {
+			r.err = err
+			return 0, err
+		}
+	}
+	n := copy(p, r.buf[r.off:])
+	r.off += n
+	return n, nil
 }
 
 func (r *reader) Close() error {
 	r.err = errClosed
+	r.buf = nil
+	r.src = nil
+	return nil
+}
+
+func (r *reader) fill() error {
+	rest, err := io.ReadAll(r.src)
+	if err != nil {
+		return fmt.Errorf("mpzz: v%d flags %#x: %w", r.hdr.ver, r.hdr.flags, err)
+	}
+	src := make([]byte, 7+len(rest))
+	copy(src, oggre)
+	src[5] = r.hdr.ver
+	src[6] = r.hdr.flags
+	copy(src[7:], rest)
+	out, err := decodeWASM(src)
+	if err != nil {
+		return fmt.Errorf("mpzz: v%d flags %#x: %w", r.hdr.ver, r.hdr.flags, err)
+	}
+	r.buf = out
+	r.off = 0
+	r.eof = true
 	return nil
 }
 
@@ -87,5 +123,5 @@ var (
 	errVersion = errors.New("mpzz: bad version")
 	errFlags   = errors.New("mpzz: bad flags")
 	errClosed  = errors.New("mpzz: closed")
-	errCodec   = errors.New("mpzz: unpublished ogg/codebook entropy; no non-PE decoder")
+	errGuest   = errors.New("mpzz: guest")
 )
