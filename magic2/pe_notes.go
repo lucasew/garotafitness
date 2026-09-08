@@ -194,10 +194,11 @@ package magic2
 //	Class 2/3 new offset: call 0x140073fc9 / 0x14007396f (past
 //	  .text VSz). x86 twins 0x45ed6f / 0x45e660 are also past.
 //	  Same shape as in-image 0x140036b00: 16-sym slot (escape 15).
-//	  +0xbe0 from 0xa6e7, +0xc00 from 0xa706 (8-byte
-//	  {base56, nbits8}); offset = base[s] + extra(nbits).
-//	  nbits>5 takes a second 16-sym. cls2 model+0x225c2;
-//	  cls3 model+0x313e6.
+//	  Both cls2 and cls3 load +0xbe0 from 0xa6e7 (8-byte
+//	  {base56, nbits8}). +0xc00/0xa706 has no decode load.
+//	  nbits<=5: nbits scale-14 bits, offset=base+extra (0 legal).
+//	  nbits>5: s2<<max(nbits,9)-4, raw<<(5) if nbits>9,
+//	  then s3 16-sym + bit; offset=rdi+2*s3+bit. No +1.
 //	  cls2 length: binary at +0x21ca2+(bsr(off)+1 & ~3), +3.
 //	  cls3 length: helper + 5.
 //	Class 10: 16-sym at +0x364ca, then a697[sym] as rep index

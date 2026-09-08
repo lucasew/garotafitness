@@ -380,60 +380,48 @@ static int be0_base(const uint8_t *nb, int ntab, int s) {
 // cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
 // In-image twin 0x140036b00: mixed 16-sym, adapt >>5 / 0x2980, escape 15.
 static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
-                          uint16_t *bits, int nbit, const uint8_t *nbtab, int ntab, uint16_t *mid,
-                          uint16_t *tail) {
+                          uint16_t *bp, const uint8_t *nbtab, int ntab, uint16_t *mid, uint16_t *tail) {
   int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
   if (s < 0) return -1;
   if (s == 15) {
-    int s2 = get_nibble(r, esc, 16, 5, kHdrTgt);
-    if (s2 < 0) return -1;
-    s = 15 + s2;
+    int sx = get_nibble(r, esc, 16, 5, kHdrTgt);
+    if (sx < 0) return -1;
+    s = 15 + sx;
   }
   if (s < 0) s = 0;
   if (s >= ntab) s = ntab - 1;
+  if (s > 30) s = 30;
   int nbits = nbtab[s];
   if (nbits > 24) nbits = 24;
   int d = be0_base(nbtab, ntab, s);
   if (nbits <= 5) {
-    // 0x140036db8: xor esi; jmp past-image helper. Treat as nbits raw bits,
-    // then the in-image tail at 0x140036f15 (16-sym + bit).
+    // 0x140036db8: xor esi; jmp 0x14006d0d4. nbits × scale-14, no tail.
     uint32_t extra = 0;
     for (int i = 0; i < nbits; i++) {
-      int b = get_bit(r, &bits[(i + nbit) & 4095], 14, 5);
+      int b = get_bit(r, &bp[s * 16 + i], 14, 5);
       if (b < 0) return -1;
       extra = (extra << 1) | (uint32_t)b;
     }
-    d += (int)extra;
-    int s3 = get_nibble(r, tail, 16, 7, kNibbleTgt);
-    if (s3 < 0) return -1;
-    int bit = get_bit(r, &bits[(nbit + 16) & 4095], 14, 5);
-    if (bit < 0) return -1;
-    d += 2 * s3 + bit;
-  } else {
-    // 0x140036dbf: 16-sym at +0x4a4, adapt >>6 / 0x1f00.
-    int s2 = get_nibble(r, mid, 16, 6, kMatchTgt);
-    if (s2 < 0) return -1;
-    // shlq %cl with cl = max(nbits,9)+60 → masked 6 bits → <<5 when nbits<=9.
-    int sh = ((nbits < 9 ? 9 : nbits) + 60) & 63;
-    d += s2 << sh;
-    if (nbits > 9) {
-      // 32-bit shrl cl=(nbits+23) → cl&31 = nbits-9.
-      int stsh = nbits - 9;
-      uint32_t low = r->x & ((1u << stsh) - 1);
-      r->x >>= stsh;
-      renorm(r);
-      d += (int)(low << 5);
-    }
-    // 0x140036f33: 16-sym at +0x8e4, adapt >>7 / 0x1c00.
-    int s3 = get_nibble(r, tail, 16, 7, kNibbleTgt);
-    if (s3 < 0) return -1;
-    int bit = get_bit(r, &bits[(nbit + 16) & 4095], 14, 5);
-    if (bit < 0) return -1;
-    // 0x1400370d0: lea eax,[r12+r12-2] + rdi + rdx
-    d += 2 * s3 + bit;
+    return d + (int)extra;
   }
-  if (d < 1) d = 1;
-  return d;
+  // 0x140036dbf: 16-sym at cdf+s*34+0x4a4, adapt >>6 / 0x1f00.
+  int s2 = get_nibble(r, mid + s * 16, 16, 6, kMatchTgt);
+  if (s2 < 0) return -1;
+  int sh = ((nbits < 9 ? 9 : nbits) + 60) & 63;
+  d += s2 << sh;
+  if (nbits > 9) {
+    int k = nbits - 9;
+    uint32_t low = r->x & ((1u << k) - 1);
+    r->x >>= k;
+    renorm(r);
+    d += (int)(low << 5);
+  }
+  // tail always: s3 at s*34+s2*1088+0x8e4 >>7/0x1c00; bit at s*2+s2*64+0x4ce4.
+  int s3 = get_nibble(r, tail + (s * 16 + s2) * 16, 16, 7, kNibbleTgt);
+  if (s3 < 0) return -1;
+  int bit = get_bit(r, &bp[s * 16 + s2], 14, 5);
+  if (bit < 0) return -1;
+  return d + 2 * s3 + bit;
 }
 
 static int bitlen(uint32_t x) {
@@ -557,8 +545,9 @@ static int decode_off(int cls, int extra, int *rep0, int *reps, int nrep) {
     }
   }
   // cls 1/2/3/11: insert at +0x44 only. class 0 still reads reps[0].
+  // decode_int returns 0 (cls2 testl %ebp,%ebp / je). Do not bump to 1.
   int d = extra;
-  if (d < 1) d = 1;
+  if (d < 0) d = 0;
   insert_new_off(reps, nrep, d);
   return d;
 }
@@ -728,8 +717,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t off3A[16];
   static uint16_t off3B[32 * 16];
   static uint16_t off3Esc[16];
-  static uint16_t off2Mid[16], off2Tail[16];
-  static uint16_t off3Mid[16], off3Tail[16];
+  static uint16_t off2Mid[32 * 16], off2Tail[32 * 16 * 16], off2Bp[32 * 16];
+  static uint16_t off3Mid[32 * 16], off3Tail[32 * 16 * 16], off3Bp[32 * 16];
   static uint16_t cls10Tab[16];
   static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
   static uint16_t offBits[4096];
@@ -753,10 +742,16 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   init_nibble(off2Esc);
   init_nibble(off3A);
   init_nibble(off3Esc);
-  init_nibble(off2Mid);
-  init_nibble(off2Tail);
-  init_nibble(off3Mid);
-  init_nibble(off3Tail);
+  for (int i = 0; i < 32; i++) {
+    init_nibble(off2Mid + i * 16);
+    init_nibble(off3Mid + i * 16);
+  }
+  for (int i = 0; i < 32 * 16; i++) {
+    init_nibble(off2Tail + i * 16);
+    init_nibble(off3Tail + i * 16);
+    off2Bp[i] = kMB / 2;
+    off3Bp[i] = kMB / 2;
+  }
   init_nibble(cls10Tab);
   offW2 = offW3 = offW11 = 0x8000;
   for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
@@ -858,18 +853,18 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       extra = s1 + s0 * 8;
     } else if (cls == 2) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off2A, off2B + brow * 16, &offW2, off2Esc, offBits, hist * 16, kA706,
-                            (int)sizeof(kA706), off2Mid, off2Tail);
+      extra = decode_new_off(&r, off2A, off2B + brow * 16, &offW2, off2Esc, off2Bp, kA6E7,
+                            (int)sizeof(kA6E7), off2Mid, off2Tail);
       if (extra < 0) break;
     } else if (cls == 3) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, offBits + 2048, hist * 16, kA6E7,
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, off3Bp, kA6E7,
                             (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
     } else if (cls == 11) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW11, off3Esc, offBits + 1024, esi, kA706,
-                            (int)sizeof(kA706), off3Mid, off3Tail);
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW11, off3Esc, off3Bp, kA6E7,
+                            (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
     } else if (cls == 10) {
       // PE: 16-sym at model+0x364ca, not the class row. a697[sym] = index.
@@ -912,7 +907,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #ifdef HOST_DEBUG
     if (n < 16) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
 #endif
-    if (m <= 0 || dist <= 0) {
+    if (m <= 0 || dist < 0) {
 #ifdef HOST_DEBUG
       fprintf(stderr, "stop match n=%d cls=%d m=%d dist=%d x=%08x\n", n, cls, m, dist, r.x);
 #endif
@@ -929,7 +924,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #endif
     // PE dict is VirtualAlloc zeros: dist>n copies 0 (same as pos==0 wrap).
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
-      dst[n] = (dist <= n) ? dst[n - dist] : 0;
+      dst[n] = (dist > 0 && dist <= n) ? dst[n - dist] : 0;
       prev = dst[n];
       n++;
     }
