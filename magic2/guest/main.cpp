@@ -3,6 +3,10 @@
 
 #include <stdint.h>
 #include <string.h>
+#ifdef HOST_DEBUG
+#include <stdio.h>
+#include <stdlib.h>
+#endif
 
 static const uint32_t kL = 1u << 23;
 static const uint32_t kMN = 1u << 15;
@@ -74,6 +78,18 @@ static const uint16_t kSym8Tgt[7][8] = {
 
 static const int kA690[7] = {0, 1, 2, 3, 17, 18, 0};
 
+// VA 0x140002f20. 8-sym length adapt (psraw $7).
+static const uint16_t kLen8Tgt[8][8] = {
+    {0x0000, 0x800f, 0x801f, 0x802f, 0x803f, 0x804f, 0x805f, 0x806f},
+    {0x0000, 0x0010, 0x801f, 0x802f, 0x803f, 0x804f, 0x805f, 0x806f},
+    {0x0000, 0x0010, 0x0020, 0x802f, 0x803f, 0x804f, 0x805f, 0x806f},
+    {0x0000, 0x0010, 0x0020, 0x0030, 0x803f, 0x804f, 0x805f, 0x806f},
+    {0x0000, 0x0010, 0x0020, 0x0030, 0x0040, 0x804f, 0x805f, 0x806f},
+    {0x0000, 0x0010, 0x0020, 0x0030, 0x0040, 0x0050, 0x805f, 0x806f},
+    {0x0000, 0x0010, 0x0020, 0x0030, 0x0040, 0x0050, 0x0060, 0x806f},
+    {0x0000, 0x0010, 0x0020, 0x0030, 0x0040, 0x0050, 0x0060, 0x0070},
+};
+
 // VA 0x140005ac0. Decode init (0x140028b67) sets [obj+0x70] here.
 // mixer = table[hist]; hist = 0x5b40[n][pos & pc_mask]. Default n=0
 // is all-zero hist, so mixer is always 99 and the second bit is skipped.
@@ -132,8 +148,8 @@ static const uint8_t kPcMask[37] = {
     3, 3, 7, 3, 15,
 };
 
-// VA 0x14000a260 / 0x14000a2b0. After a literal/match, esi ← table[esi].
-static const uint8_t kA260[256] = {
+// VA 0x14000a260. Literal uses [esi]; class 11/1 +16; class 4-10 +32; class 0 +48.
+static const uint8_t kEsiTab[336] = {
     0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 7, 8, 0, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 13, 13, 13, 13, 13, 10,
     11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 14, 14, 14, 14, 14, 11, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 14, 14, 14, 14, 14, 12,
     15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
@@ -142,17 +158,20 @@ static const uint8_t kA260[256] = {
     108, 108, 108, 108, 108, 108, 143, 143, 143, 143, 143, 176, 107, 107, 107, 176, 176, 176, 176, 176, 176, 176, 176, 106, 142, 142, 142, 142, 142, 142, 142, 105,
     105, 104, 104, 104, 104, 104, 104, 104, 104, 141, 141, 141, 103, 103, 103, 103, 141, 141, 141, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175,
     175, 175, 175, 140, 140, 140, 140, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 174, 174, 174, 174, 174,
+    174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 138, 174, 138, 138, 174, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137,
+    173, 173, 136, 173, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 172, 172, 172, 172, 172,
+    172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172,
 };
-static const uint8_t kA2B0[256] = {
-    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 73, 77, 72, 76, 76, 108, 140, 75, 75, 107, 74, 74, 74, 107, 107, 73,
-    73, 139, 72, 72, 72, 106, 106, 106, 139, 139, 139, 69, 69, 69, 105, 145, 77, 112, 145, 177, 76, 177, 177, 177, 75, 177, 111, 74, 74, 144, 73, 73,
-    73, 110, 110, 110, 72, 144, 144, 71, 109, 70, 70, 109, 109, 143, 143, 143, 108, 108, 108, 108, 108, 108, 143, 143, 143, 143, 143, 176, 107, 107, 107, 176,
-    176, 176, 176, 176, 176, 176, 176, 106, 142, 142, 142, 142, 142, 142, 142, 105, 105, 104, 104, 104, 104, 104, 104, 104, 104, 141, 141, 141, 103, 103, 103, 103,
-    141, 141, 141, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 140, 140, 140, 140, 139, 139, 139, 139, 139, 139, 139, 139, 139,
-    139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 138, 174, 138, 138, 174, 137,
-    137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 173, 173, 136, 173, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136,
-    173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172,
-};
+
+static int esi_after_match(int esi, int cls) {
+  int add = 16;
+  if (cls == 0) add = 48;
+  else if (cls >= 4 && cls <= 10) add = 32;
+  int i = esi + add;
+  if (i < 0) i = 0;
+  if (i >= 336) i = 335;
+  return kEsiTab[i];
+}
 
 struct Rans {
   uint32_t x;
@@ -197,6 +216,15 @@ static void adapt16(uint16_t *cdf, int sym, const uint16_t tgt[][16], int shift)
   if (sym < 0) sym = 0;
   if (sym > 15) sym = 15;
   for (int j = 0; j < 16; j++) {
+    int16_t d = (int16_t)tgt[sym][j] - (int16_t)cdf[j];
+    cdf[j] = (uint16_t)((int16_t)cdf[j] + (d >> shift));
+  }
+}
+
+static void adapt8(uint16_t *cdf, int sym, const uint16_t tgt[][8], int shift) {
+  if (sym < 0) sym = 0;
+  if (sym > 7) sym = 7;
+  for (int j = 0; j < 8; j++) {
     int16_t d = (int16_t)tgt[sym][j] - (int16_t)cdf[j];
     cdf[j] = (uint16_t)((int16_t)cdf[j] + (d >> shift));
   }
@@ -254,11 +282,27 @@ static int get_nibble(Rans *r, uint16_t *cdf, int last, int shift, const uint16_
   uint32_t quo = r->x >> 15;
   int i = find16(cdf, slot, last);
   uint32_t start = cdf[i - 1];
-  uint32_t end = (i < 16) ? cdf[i] : 0x8000;
+  uint32_t end = (i < last && i < 16) ? cdf[i] : 0x8000;
   if (end <= start) end = start + 1;
   r->x = (end - start) * quo + (slot - start);
   int sym = i - 1;
   adapt16(cdf, sym, tgt, shift);
+  renorm(r);
+  return sym;
+}
+
+// 8-sym length at 0x140039f08: add 0x100+bsf, adapt >>7 toward 0x2f20.
+static int get_sym8(Rans *r, uint16_t *cdf) {
+  if (!r->ok) return -1;
+  uint32_t slot = r->x & (kMN - 1);
+  uint32_t quo = r->x >> 15;
+  int i = find16(cdf, slot, 8);
+  uint32_t start = cdf[i - 1];
+  uint32_t end = (i < 8) ? cdf[i] : 0x8000;
+  if (end <= start) end = start + 1;
+  r->x = (end - start) * quo + (slot - start);
+  int sym = i - 1;
+  adapt8(cdf, sym, kLen8Tgt, 7);
   renorm(r);
   return sym;
 }
@@ -352,17 +396,19 @@ static int extra_sample(Rans *r, Hist *h, uint16_t *bits, int bsf, int h1) {
   return r10;
 }
 
-static int decode_off(int cls, int extra, int *rep0, int *reps) {
+// 0x140039dd0: a690[cls-4] is an index into the recent-offset array
+// (0..3, 17, 18), not a raw bit count. Rotate that slot to [0].
+static int decode_off(int cls, int extra, int *rep0, int *reps, int nrep) {
   if (cls == 0) {
     if (*rep0 < 1) *rep0 = 1;
     return *rep0;
   }
   if (cls >= 4 && cls <= 10) {
-    int n = (cls == 10) ? extra : kA690[cls - 4];
-    if (n >= 0 && n < 4) {
-      int d = reps[n];
-      if (n > 0) {
-        for (int i = n; i > 0; i--) reps[i] = reps[i - 1];
+    int idx = (cls == 10) ? extra : kA690[cls - 4];
+    if (idx >= 0 && idx < nrep) {
+      int d = reps[idx];
+      if (idx > 0) {
+        for (int i = idx; i > 0; i--) reps[i] = reps[i - 1];
       }
       if (d < 1) d = 1;
       reps[0] = d;
@@ -372,7 +418,7 @@ static int decode_off(int cls, int extra, int *rep0, int *reps) {
   }
   int d = extra;
   if (d < 1) d = 1;
-  for (int i = 3; i > 0; i--) reps[i] = reps[i - 1];
+  for (int i = nrep - 1; i > 0; i--) reps[i] = reps[i - 1];
   reps[0] = d;
   *rep0 = d;
   return d;
@@ -445,7 +491,7 @@ static int decode_iir(const uint8_t *src, int slen, uint8_t *dst, int dcap, unsi
         extra = d + 1;
       }
     }
-    decode_off(cls, extra, &rep0, reps);
+    decode_off(cls, extra, &rep0, reps, 4);
     int ln = get_nibble(&r, lenTab + (prev % 256) * 8, 8, 6, kNibbleTgt);
     if (ln < 0) break;
     int m = ln + 3;
@@ -505,7 +551,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   uint16_t litP[4096];
   for (int i = 0; i < 4096; i++) litP[i] = kMB / 2;
   int n = 0, prev = 0, rep0lit = 0, rep0 = 1, esi = 0;
-  int reps[4] = {1, 1, 1, 1};
+  int reps[32];
+  for (int i = 0; i < 32; i++) reps[i] = 1;
   const int opt_n = 0; // [obj+0x64] ctor default
   const int pc_mask = kPcMask[opt_n];
   while (n < dcap && n < kWant && r.ok) {
@@ -537,7 +584,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       uint8_t b = (uint8_t)((hi << 4) | lo);
       dst[n++] = b;
       prev = rep0lit = b;
-      esi = kA260[esi];
+      esi = kEsiTab[esi];
+#ifdef HOST_DEBUG
+      if (n <= 8) fprintf(stderr, "lit n=%d b=%02x x=%08x esi=%d\n", n, b, r.x, esi);
+#endif
       continue;
     }
     if (tok == 2) {
@@ -550,48 +600,60 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     int crow = hist * 16 + esi;
     if (crow >= nCls) crow = nCls - 1;
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
-    if (cls < 0 || cls > 11) break;
-    int extra = 0;
-    if (cls != 0) {
-      int nb = (cls >= 4 && cls <= 9) ? kA690[cls - 4] : -1;
-      if (nb > 0) {
-        for (int i = 0; i < nb && i < 18; i++) {
-          int b = get_bit(&r, &bmTab[(rep0lit + i) % nBM], 14, 4);
-          if (b < 0) return 0;
-          extra = extra * 2 + b;
-        }
-      } else if (cls == 1 || cls == 2 || cls == 3 || cls == 11) {
-        int d = get_nibble(&r, hiA + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
-        if (d < 0) break;
-        extra = d + 1;
-      }
+    if (cls < 0 || cls > 11) {
+#ifdef HOST_DEBUG
+      fprintf(stderr, "stop cls n=%d cls=%d crow=%d x=%08x\n", n, cls, crow, r.x);
+#endif
+      break;
     }
-    decode_off(cls, extra, &rep0, reps);
+    int extra = 0;
+    if (cls == 1 || cls == 2 || cls == 3 || cls == 11) {
+      int d = get_nibble(&r, hiA + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
+      if (d < 0) break;
+      extra = d + 1;
+    } else if (cls == 10) {
+      extra = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
+      if (extra < 0) break;
+    }
+    decode_off(cls, extra, &rep0, reps, 32);
     int m;
-    if (cls == 2) {
+    if (cls == 0) {
+      // 0x14003a396: class 0 length is the immediate 1, no 8-sym.
+      m = 1;
+    } else if (cls == 2) {
       int b = get_bit(&r, &bmTab[rep0lit % nBM], 14, 4);
       if (b < 0) break;
       m = 3 + b;
     } else {
-      int ln = get_nibble(&r, lenTab + (prev % nLen) * 8, 8, 6, kNibbleTgt);
+      int lrow = hist * 16 + esi;
+      if (lrow >= nLen) lrow = nLen - 1;
+      int ln = get_sym8(&r, lenTab + lrow * 8);
       if (ln < 0) break;
       m = ln + 3;
       if (cls == 3) m = ln + 5;
       if (cls == 11) m = ln + 2;
       if (m == 10) {
-        int en = get_nibble(&r, lenTab + (prev % nLen) * 8, 8, 6, kNibbleTgt);
+        int en = get_sym8(&r, lenTab + lrow * 8);
         if (en < 0) break;
         m = 10 + en;
       }
     }
-    if (m <= 0 || rep0 <= 0 || rep0 > n) break;
+#ifdef HOST_DEBUG
+    fprintf(stderr, "match n=%d cls=%d extra=%d m=%d rep0=%d esi=%d hist=%d\n", n, cls, extra, m, rep0, esi, hist);
+#endif
+    if (m <= 0 || rep0 <= 0 || rep0 > n) {
+#ifdef HOST_DEBUG
+      fprintf(stderr, "stop match n=%d cls=%d m=%d rep0=%d x=%08x off=%d\n", n, cls, m, rep0, r.x, r.off);
+#endif
+      break;
+    }
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
       dst[n] = dst[n - rep0];
       prev = dst[n];
       n++;
     }
     if (n > 0) rep0lit = dst[n - 1];
-    esi = kA2B0[esi];
+    esi = esi_after_match(esi, cls);
   }
   return n;
 }
@@ -608,3 +670,31 @@ extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dca
   if (hit_crc(dst, n)) return n;
   return decode_v22(src, slen, dst, dcap, 1);
 }
+
+#ifdef HOST_DEBUG
+int main(int argc, char **argv) {
+  const char *path = argc > 1 ? argv[1]
+                              : "/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-06.bin";
+  FILE *f = fopen(path, "rb");
+  if (!f) {
+    perror(path);
+    return 1;
+  }
+  if (fseek(f, 0x1F + 5, SEEK_SET) != 0) {
+    perror("seek");
+    return 1;
+  }
+  static uint8_t src[93116];
+  int slen = (int)fread(src, 1, sizeof(src), f);
+  fclose(f);
+  static uint8_t dst[430889];
+  int n = decode_v22(src, slen, dst, (int)sizeof(dst), 1);
+  fprintf(stderr, "n=%d crc6=%08x first=", n, n >= 6 ? crc32_ieee(dst, 6) : 0);
+  for (int i = 0; i < n && i < 32; i++) fprintf(stderr, "%02x", dst[i]);
+  fprintf(stderr, "\n");
+  if (n >= kEmu + kApp) {
+    fprintf(stderr, "appid crc=%08x want=%08x\n", crc32_ieee(dst + kEmu, kApp), kAppCRC);
+  }
+  return hit_crc(dst, n) ? 0 : 2;
+}
+#endif
