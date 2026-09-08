@@ -730,7 +730,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     // class CDF at model+0x1240 + hist*544 + esi*34 (0x140039b3a)
     int crow = hist * 16 + esi;
     if (crow >= nCls) crow = nCls - 1;
-    int cls = get_nibble(&r, clsTab + crow * 17, 16, 6, kMatchTgt);
+    int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
     if (cls < 0 || cls > 11) {
 #ifdef HOST_TRACE
       fprintf(stderr, "stop cls n=%d cls=%d crow=%d x=%08x\n", n, cls, crow, r.x);
@@ -760,7 +760,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       extra = decode_new_off(&r, off3Tab + 16, off3Tab, offBits + 1024, esi);
       if (extra < 0) break;
     } else if (cls == 10) {
-      int s = get_nibble(&r, clsTab + crow * 17, 16, 6, kMatchTgt);
+      int s = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
       if (s < 0) break;
       extra = kA697[s & 15];
     }
