@@ -161,6 +161,11 @@ package magic2
 //	starts at 0. After lit esi=a260[esi]; after match a2b0[esi].
 //	First bit 1 = match @ 0x14002a539 → decodeMatch
 //	(class CDF model+0x1240+hist*544+esi*34, adapt >>6 / 0x1f00).
+//	Class 0 length is the immediate 1 (0x14003a396), no 8-sym.
+//	Classes 4-9: a690[cls-4] indexes the recent-offset array
+//	(slots 0..3, 17, 18), not extra bits (0x140039dd0).
+//	Length 8-sym at +0x3ffea, add 0x100+bsf, adapt >>7 / 0x2f20.
+//	Class 1 new offset: two 8-sym, rbp = s1 + s0*8, insert at +0x44.
 //	Literal @ 0x14002b7e9 mixes two 16-sym CDFs (row stride 34):
 //	hi A model+(hist*17<<7)+(prev>>blr)*34
 //	hi B model+(hist*17<<9)+(prev>>blo)*34+0x26c80

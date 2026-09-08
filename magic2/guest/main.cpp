@@ -585,7 +585,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       dst[n++] = b;
       prev = rep0lit = b;
       esi = kEsiTab[esi];
-#ifdef HOST_DEBUG
+#ifdef HOST_TRACE
       if (n <= 8) fprintf(stderr, "lit n=%d b=%02x x=%08x esi=%d\n", n, b, r.x, esi);
 #endif
       continue;
@@ -595,19 +595,26 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       // DXT jmp 0xa880[mix] is not lifted. Either way we stop.
       break;
     }
-    if (n == 0) break;
     // class CDF at model+0x1240 + hist*544 + esi*34 (0x140039b3a)
     int crow = hist * 16 + esi;
     if (crow >= nCls) crow = nCls - 1;
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
     if (cls < 0 || cls > 11) {
-#ifdef HOST_DEBUG
+#ifdef HOST_TRACE
       fprintf(stderr, "stop cls n=%d cls=%d crow=%d x=%08x\n", n, cls, crow, r.x);
 #endif
       break;
     }
     int extra = 0;
-    if (cls == 1 || cls == 2 || cls == 3 || cls == 11) {
+    if (cls == 1) {
+      // two 8-sym then rbp = s1 + s0*8, stored at reps[17] (0x14003a336)
+      int s0 = get_sym8(&r, lenTab + (hist % nLen) * 8);
+      if (s0 < 0) break;
+      int s1 = get_sym8(&r, lenTab + ((hist * 16 + s0) % nLen) * 8);
+      if (s1 < 0) break;
+      extra = s1 + s0 * 8;
+      if (extra < 1) extra = 1;
+    } else if (cls == 2 || cls == 3 || cls == 11) {
       int d = get_nibble(&r, hiA + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
       if (d < 0) break;
       extra = d + 1;
@@ -638,17 +645,17 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
         m = 10 + en;
       }
     }
-#ifdef HOST_DEBUG
+#ifdef HOST_TRACE
     fprintf(stderr, "match n=%d cls=%d extra=%d m=%d rep0=%d esi=%d hist=%d\n", n, cls, extra, m, rep0, esi, hist);
 #endif
-    if (m <= 0 || rep0 <= 0 || rep0 > n) {
-#ifdef HOST_DEBUG
+    if (m <= 0 || rep0 <= 0) {
+#ifdef HOST_TRACE
       fprintf(stderr, "stop match n=%d cls=%d m=%d rep0=%d x=%08x off=%d\n", n, cls, m, rep0, r.x, r.off);
 #endif
       break;
     }
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
-      dst[n] = dst[n - rep0];
+      dst[n] = (rep0 <= n) ? dst[n - rep0] : 0;
       prev = dst[n];
       n++;
     }
@@ -672,6 +679,35 @@ extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dca
 }
 
 #ifdef HOST_DEBUG
+static void try_one(const uint8_t *src, int slen, int skip, int le) {
+  if (skip + 4 > slen) return;
+  uint8_t tmp[93116];
+  int nsrc = slen - skip;
+  if (nsrc > (int)sizeof(tmp)) nsrc = (int)sizeof(tmp);
+  memcpy(tmp, src + skip, (size_t)nsrc);
+  if (le) {
+    uint8_t a = tmp[0], b = tmp[1], c = tmp[2], d = tmp[3];
+    tmp[0] = d;
+    tmp[1] = c;
+    tmp[2] = b;
+    tmp[3] = a;
+  }
+  static uint8_t dst[430889];
+  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1);
+  int pr = 0;
+  for (int i = 0; i < n && i < 16; i++) {
+    uint8_t c = dst[i];
+    if (c == 9 || c == 10 || c == 13 || (c >= 32 && c < 127)) pr++;
+  }
+  fprintf(stderr, "skip=%d le=%d n=%d pr=%d first=", skip, le, n, pr);
+  for (int i = 0; i < n && i < 16; i++) fprintf(stderr, "%02x", dst[i]);
+  fprintf(stderr, "\n");
+  if (n >= kEmu + kApp) {
+    uint32_t c = crc32_ieee(dst + kEmu, kApp);
+    fprintf(stderr, "  appid=%08x %s\n", c, c == kAppCRC ? "HIT" : "");
+  }
+}
+
 int main(int argc, char **argv) {
   const char *path = argc > 1 ? argv[1]
                               : "/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-06.bin";
@@ -687,14 +723,10 @@ int main(int argc, char **argv) {
   static uint8_t src[93116];
   int slen = (int)fread(src, 1, sizeof(src), f);
   fclose(f);
-  static uint8_t dst[430889];
-  int n = decode_v22(src, slen, dst, (int)sizeof(dst), 1);
-  fprintf(stderr, "n=%d crc6=%08x first=", n, n >= 6 ? crc32_ieee(dst, 6) : 0);
-  for (int i = 0; i < n && i < 32; i++) fprintf(stderr, "%02x", dst[i]);
-  fprintf(stderr, "\n");
-  if (n >= kEmu + kApp) {
-    fprintf(stderr, "appid crc=%08x want=%08x\n", crc32_ieee(dst + kEmu, kApp), kAppCRC);
+  for (int skip = 0; skip <= 16; skip += 4) {
+    try_one(src, slen, skip, 0);
+    try_one(src, slen, skip, 1);
   }
-  return hit_crc(dst, n) ? 0 : 2;
+  return 2;
 }
 #endif
