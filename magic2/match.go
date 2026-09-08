@@ -24,7 +24,7 @@ package magic2
 // FCM. Jump table 0x14000a8c0:
 //
 //	0        → 0x14003a374  rep0 (load *rep0, no extra bits)
-//	1        → 0x14003a1c3  new / short
+//	1        → 0x14003a1c3  new / short; two 8-sym, off=s1+s0*8, len=2
 //	2        → 0x14003a0ad  new; length 3+bit
 //	3        → 0x14003a013  new; length base 5
 //	4..10    → 0x140039cce  reps[a690[cls-4]] or long (cls==10)

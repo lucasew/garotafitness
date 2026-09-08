@@ -348,15 +348,17 @@ static int get_sym8_tgt(Rans *r, uint16_t *cdf, const uint16_t tgt[][8], int shi
 static int get_sym8(Rans *r, uint16_t *cdf) { return get_sym8_tgt(r, cdf, kLen8Tgt, 7); }
 
 // cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
-// x86 twins 0x45ed6f / 0x45e660 are also past .text; same shape as the
-// in-image integer decoder at 0x140036b00: 16-sym slot, escape 15, then
-// that many extra scale-14 bits. offset = (1<<nbits)+extra (min 1).
-static int decode_new_off(Rans *r, uint16_t *cdf, uint16_t *cdf_esc, uint16_t *bits, int nbit) {
-  int s = get_nibble(r, cdf, 16, 6, kMatchTgt);
+// x86 twins 0x45ed6f / 0x45e660 are also past .text. In-image twin
+// 0x140036b00: mixed 16-sym (A at r9, B at r9+bitlen*34+0x44, adapt >>5
+// toward 0x2980), escape 15 → second 16-sym at r9+0x22, then nbits
+// extra scale-14 >>5 bits. offset = (1<<nbits)+extra (min 1).
+static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
+                          uint16_t *bits, int nbit) {
+  int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
   if (s < 0) return -1;
   int nbits = s;
   if (s == 15) {
-    int s2 = get_nibble(r, cdf_esc, 16, 6, kMatchTgt);
+    int s2 = get_nibble(r, esc, 16, 5, kHdrTgt);
     if (s2 < 0) return -1;
     nbits = 15 + s2;
   }
@@ -492,10 +494,10 @@ static int decode_off(int cls, int extra, int *rep0, int *reps, int nrep) {
       return d;
     }
   }
+  // cls 1/2/3/11: insert at +0x44 only. class 0 still reads reps[0].
   int d = extra;
   if (d < 1) d = 1;
   insert_new_off(reps, nrep, d);
-  *rep0 = d;
   return d;
 }
 
@@ -622,8 +624,11 @@ static int decode_opt_header(Rans *r) {
   return 0;
 }
 
-static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int use_second, int use_hdr) {
-  if (slen < 4) return 0;
+static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int use_second, int use_hdr, int opt_skip = 0) {
+  if (opt_skip < 0) opt_skip = 0;
+  if (slen < opt_skip + 4) return 0;
+  src += opt_skip;
+  slen -= opt_skip;
   Rans r;
   r.buf = src;
   r.off = 4;
@@ -638,13 +643,18 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t hiB[256 * 16];
   static uint16_t loA[32 * 16];
   static uint16_t loB[256 * 16];
-  // class CDF stride 34 bytes = 17 u16 (0x140039b3a hist*544+esi*34)
-  static uint16_t clsTab[256 * 17];
+  // Packed 16-wide. PE model stride 34 is padding, not our row pitch.
+  static uint16_t clsTab[256 * 16];
   static uint16_t lenTab[256 * 8];
   static uint16_t off8a[32 * 8];
   static uint16_t off8b[32 * 8];
-  static uint16_t off2Tab[32 * 16];
-  static uint16_t off3Tab[32 * 16];
+  static uint16_t off2A[16];
+  static uint16_t off2B[32 * 16];
+  static uint16_t off2Esc[16];
+  static uint16_t off3A[16];
+  static uint16_t off3B[32 * 16];
+  static uint16_t off3Esc[16];
+  static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
   static uint16_t offBits[4096];
   static uint16_t bmTab[64];
   static uint16_t wHi[16];
@@ -653,17 +663,19 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   for (int i = 0; i < 256; i++) init_nibble(hiB + i * 16);
   for (int i = 0; i < 32; i++) init_nibble(loA + i * 16);
   for (int i = 0; i < 256; i++) init_nibble(loB + i * 16);
-  for (int i = 0; i < nCls; i++) {
-    init_nibble(clsTab + i * 17);
-    clsTab[i * 17 + 16] = 0x8000;
-  }
+  for (int i = 0; i < nCls; i++) init_nibble(clsTab + i * 16);
   for (int i = 0; i < nLen; i++) init_sym8(lenTab + i * 8);
   for (int i = 0; i < 32; i++) {
     init_sym8(off8a + i * 8);
     init_sym8(off8b + i * 8);
-    init_nibble(off2Tab + i * 16);
-    init_nibble(off3Tab + i * 16);
+    init_nibble(off2B + i * 16);
+    init_nibble(off3B + i * 16);
   }
+  init_nibble(off2A);
+  init_nibble(off2Esc);
+  init_nibble(off3A);
+  init_nibble(off3Esc);
+  offW2 = offW3 = offW11 = 0x8000;
   for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
   for (int i = 0; i < 16; i++) wHi[i] = 0x8000;
@@ -751,13 +763,16 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (s1 < 0) break;
       extra = s1 + s0 * 8;
     } else if (cls == 2) {
-      extra = decode_new_off(&r, off2Tab, off2Tab + 16, offBits, hist * 16);
+      int brow = bitlen((uint32_t)rep0) % 32;
+      extra = decode_new_off(&r, off2A, off2B + brow * 16, &offW2, off2Esc, offBits, hist * 16);
       if (extra < 0) break;
     } else if (cls == 3) {
-      extra = decode_new_off(&r, off3Tab, off3Tab + 16, offBits + 2048, hist * 16);
+      int brow = bitlen((uint32_t)rep0) % 32;
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, offBits + 2048, hist * 16);
       if (extra < 0) break;
     } else if (cls == 11) {
-      extra = decode_new_off(&r, off3Tab + 16, off3Tab, offBits + 1024, esi);
+      int brow = bitlen((uint32_t)rep0) % 32;
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW11, off3Esc, offBits + 1024, esi);
       if (extra < 0) break;
     } else if (cls == 10) {
       int s = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
@@ -816,19 +831,21 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (!src || slen < 4 || !dst || dcap <= 0) return 0;
   // Main loop reloads state from 0xb38; option header is a separate rANS.
-  int n = decode_v22(src, slen, dst, dcap, 1, 0);
+  int n = decode_v22(src, slen, dst, dcap, 1, 0, 0);
   if (hit_crc(dst, n)) return n;
-  n = decode_v22(src, slen, dst, dcap, 0, 0);
+  n = decode_v22(src, slen, dst, dcap, 1, 0, 22);
   if (hit_crc(dst, n)) return n;
-  n = decode_v22(src, slen, dst, dcap, 1, 1);
+  n = decode_v22(src, slen, dst, dcap, 0, 0, 0);
   if (hit_crc(dst, n)) return n;
-  n = decode_v22(src, slen, dst, dcap, 0, 1);
+  n = decode_v22(src, slen, dst, dcap, 1, 1, 0);
+  if (hit_crc(dst, n)) return n;
+  n = decode_v22(src, slen, dst, dcap, 0, 1, 0);
   if (hit_crc(dst, n)) return n;
   n = decode_iir(src, slen, dst, dcap, 5);
   if (hit_crc(dst, n)) return n;
   n = decode_iir(src, slen, dst, dcap, 4);
   if (hit_crc(dst, n)) return n;
-  return decode_v22(src, slen, dst, dcap, 1, 0);
+  return decode_v22(src, slen, dst, dcap, 1, 0, 0);
 }
 
 #ifdef HOST_DEBUG
@@ -839,7 +856,7 @@ static void try_one(const uint8_t *src, int slen, int skip, int hdr) {
   if (nsrc > (int)sizeof(tmp)) nsrc = (int)sizeof(tmp);
   memcpy(tmp, src + skip, (size_t)nsrc);
   static uint8_t dst[430889];
-  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1, hdr);
+  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1, hdr, 0);
   int pr = 0;
   for (int i = 0; i < n && i < 16; i++) {
     uint8_t c = dst[i];
