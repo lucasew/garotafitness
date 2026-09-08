@@ -150,7 +150,14 @@ package magic2
 //	v22 LZ token @ 0x140029e04: scale 14 adapt >>5. Mixer byte
 //	from [obj+0x70][hist] compared to 0x63 (not v20's 9). If
 //	below, a second >>5 bit on p0+2: 0=still literal, 1=DXT
-//	(al=2). First bit 1 = match @ 0x14002a539 → decodeMatch.
+//	(al=2). tok==2 is DXT only when mixer<=8 (jmp 0xa880);
+//	mixer>8 goes to the error path at 0x14002a620.
+//	Init 0x140028b67 sets +0x70 = 0x140005ac0 (mostly 99;
+//	nonzero slots are DXT classes 0..13). hist =
+//	0x140005b40[min(+0x64,0x24)][pos & +0xc39]. Ctor +0x64=0
+//	and 0x5a98[0]=0, so hist=0, mixer=99, no second bit.
+//	0xa2b0/0xa260 update esi (p0 context), not the 99-compare.
+//	First bit 1 = match @ 0x14002a539 → decodeMatch.
 //	Literal @ 0x14002b7e9 mixes two 16-sym CDFs:
 //	mixed = (w*A + (uint16)(0-w)*B)>>16 (pmulhuw+paddw),
 //	find on mixed, w -= w>>4; if freqA>=freqB { w += 0xfff }.
