@@ -719,6 +719,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t off3Esc[16];
   static uint16_t off2Mid[32 * 16], off2Tail[32 * 16 * 16], off2Bp[32 * 16];
   static uint16_t off3Mid[32 * 16], off3Tail[32 * 16 * 16], off3Bp[32 * 16];
+  static uint16_t off11A[16], off11B[16], off11Esc[16], off11W = 0x8000;
+  static uint16_t off11Mid[32 * 16], off11Tail[32 * 16 * 16], off11Bp[32 * 16];
   static uint16_t cls10Tab[16];
   static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
   static uint16_t offBits[4096];
@@ -751,6 +753,15 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     init_nibble(off3Tail + i * 16);
     off2Bp[i] = kMB / 2;
     off3Bp[i] = kMB / 2;
+  }
+  init_nibble(off11A);
+  init_nibble(off11B);
+  init_nibble(off11Esc);
+  off11W = 0x8000;
+  for (int i = 0; i < 32; i++) init_nibble(off11Mid + i * 16);
+  for (int i = 0; i < 32 * 16; i++) {
+    init_nibble(off11Tail + i * 16);
+    off11Bp[i] = kMB / 2;
   }
   init_nibble(cls10Tab);
   offW2 = offW3 = offW11 = 0x8000;
@@ -827,7 +838,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     int crow = esi * 16 + hist;
     if (crow >= nCls) crow = nCls - 1;
 #ifdef HOST_DEBUG
-    if (n < 16) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
+    if (n < 40) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
 #endif
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
     // PE 0x140039bf9: cmp r15, 0xb / ja 0x14003a3a0 — cls 12-15 are
@@ -839,6 +850,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       break;
     }
     int extra = 0;
+    int m_fixed = -1;
     if (cls == 1) {
       // s0 at +0x1c560 adapt >>6 / 0x11a0; s1 at +0x1ca82 >>7 / 0x2f20
       // lea rbp,[rcx+rbp*8] (0-based == x86 lea ebx,[eax+edx*8-9])
@@ -862,10 +874,15 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
                             (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
     } else if (cls == 11) {
-      int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW11, off3Esc, off3Bp, kA6E7,
-                            (int)sizeof(kA6E7), off3Mid, off3Tail);
+      // 0x140039c1d: helper @ +0x9b200 → length, helper @ +0x9bbb2 → off,
+      // then add $2 to length. Same decode_int prototype as cls2/3.
+      int ln = decode_new_off(&r, off11A, off11B, &off11W, off11Esc, off11Bp, kA706,
+                              (int)sizeof(kA706), off11Mid, off11Tail);
+      if (ln < 0) break;
+      extra = decode_new_off(&r, off3A, off3B + (bitlen((uint32_t)rep0) % 32) * 16, &offW11, off3Esc, off3Bp,
+                            kA6E7, (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
+      m_fixed = ln + 2;
     } else if (cls == 10) {
       // PE: 16-sym at model+0x364ca, not the class row. a697[sym] = index.
       int s = get_nibble(&r, cls10Tab, 16, 6, kMatchTgt);
@@ -874,7 +891,9 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     }
     int dist = decode_off(cls, extra, &rep0, reps, 32);
     int m;
-    if (cls == 0) {
+    if (m_fixed >= 0) {
+      m = m_fixed;
+    } else if (cls == 0) {
       // 0x14003a396: class 0 length is the immediate 1, no 8-sym.
       m = 1;
     } else if (cls == 1 || (cls >= 12 && cls <= 15)) {
@@ -905,7 +924,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       }
     }
 #ifdef HOST_DEBUG
-    if (n < 16) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
+    if (n < 40) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
 #endif
     if (m <= 0 || dist < 0) {
 #ifdef HOST_DEBUG
