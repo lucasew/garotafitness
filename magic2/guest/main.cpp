@@ -205,11 +205,14 @@ static const uint8_t kEsiTab[336] = {
     172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172,
 };
 
-static int esi_after_match(int esi, int cls) {
-  int add = 16;
-  if (cls == 0) add = 48;
-  else if ((cls >= 4 && cls <= 10) || (cls >= 12 && cls <= 15)) add = 32;
-  int i = esi + add;
+static int esi_after_match(int esi, int cls, int hist) {
+  // Match classes index the esi map by hist (r13), not the live esi.
+  // cls0 0xa290[hist]; cls1 0xa270[hist]; cls4-10/12-15 0xa280[hist].
+  (void)esi;
+  int i;
+  if (cls == 0) i = 48 + (hist & 15);
+  else if ((cls >= 4 && cls <= 10) || (cls >= 12 && cls <= 15)) i = 32 + (hist & 15);
+  else i = 16 + (hist & 15);
   if (i < 0) i = 0;
   if (i >= 336) i = 335;
   return kEsiTab[i];
@@ -783,8 +786,9 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #endif
       break;
     }
-    // class CDF at model+0x1240 + hist*544 + esi*34 (0x140039b3a)
-    int crow = hist * 16 + esi;
+    // class CDF at *(+0xb50)+0x1240 + esi*544 + hist*34 (0x140039b04).
+    // Packed 16-wide: crow = esi*16 + hist. Axes were swapped.
+    int crow = esi * 16 + hist;
     if (crow >= nCls) crow = nCls - 1;
 #ifdef HOST_DEBUG
     if (n < 16) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
@@ -890,7 +894,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       n++;
     }
     if (n > 0) rep0lit = dst[n - 1];
-    esi = esi_after_match(esi, cls);
+    esi = esi_after_match(esi, cls, hist);
   }
 #ifdef HOST_DEBUG
   fprintf(stderr, "end n=%d x=%08x off=%d ok=%d\n", n, r.x, r.off, (int)r.ok);
@@ -955,7 +959,9 @@ static void try_one(const uint8_t *src, int slen, int skip, int hdr, int opt_ski
   fprintf(stderr, "\n");
   if (n >= kEmu + kApp) {
     uint32_t c = crc32_ieee(dst + kEmu, kApp);
-    fprintf(stderr, "  appid=%08x %s\n", c, c == kAppCRC ? "HIT" : "");
+    fprintf(stderr, "  appid=%08x %s bytes=", c, c == kAppCRC ? "HIT" : "");
+    for (int i = 0; i < kApp; i++) fprintf(stderr, "%02x", dst[kEmu + i]);
+    fprintf(stderr, "\n");
     if (c == kAppCRC) {
       FILE *hf = fopen("/tmp/magic2-CRC-HIT.txt", "w");
       if (hf) {
