@@ -15,9 +15,9 @@ import (
 //
 // Official decode is PE: arc.ini unpackcmd `mpz.exe d packed.mpz
 // out.mp3`. mpzapi (nishi mpzapi_v1b) only LoadLibrary's
-// MpzSlimmer.dll and calls GetModule()->process. The engine is
-// MP3Model::Process (NDA; Shelwien). INV-03 forbids running the
-// image. No non-PE source exists to wrap or compile.
+// MpzSlimmer.dll and calls GetModule()->process. INV-03 forbids
+// running that image. The guest is a mechanical RetDec
+// transcription of MP3Model (FULL.c) compiled to wasm.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
@@ -32,19 +32,52 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 type reader struct {
 	src io.Reader
 	hdr Header
+	buf []byte
+	off int
 	err error
+	eof bool
 }
 
-func (r *reader) Read([]byte) (int, error) {
-	if r.err != nil {
+func (r *reader) Read(p []byte) (int, error) {
+	if r.err != nil && r.off >= len(r.buf) {
 		return 0, r.err
 	}
-	r.err = fmt.Errorf("mpz: %s: %w", r.hdr, errCodec)
-	return 0, r.err
+	if r.off >= len(r.buf) {
+		if r.eof {
+			return 0, io.EOF
+		}
+		if err := r.fill(); err != nil {
+			r.err = err
+			return 0, err
+		}
+	}
+	n := copy(p, r.buf[r.off:])
+	r.off += n
+	return n, nil
 }
 
 func (r *reader) Close() error {
 	r.err = errClosed
+	r.buf = nil
+	r.src = nil
+	return nil
+}
+
+func (r *reader) fill() error {
+	src, err := io.ReadAll(r.src)
+	if err != nil {
+		return err
+	}
+	if len(src) == 0 {
+		return fmt.Errorf("mpz: %s: %w", r.hdr, errGuest)
+	}
+	out, err := decodeWASM(src, r.hdr.Orig, r.hdr.Frames)
+	if err != nil {
+		return fmt.Errorf("mpz: %s: %w", r.hdr, err)
+	}
+	r.buf = out
+	r.off = 0
+	r.eof = true
 	return nil
 }
 
@@ -92,5 +125,5 @@ var (
 	errNil    = errors.New("mpz: nil reader")
 	errMagic  = errors.New("mpz: bad magic")
 	errClosed = errors.New("mpz: closed")
-	errCodec  = errors.New("mpz: unpublished MP3Model CM payload; no non-PE decoder")
+	errGuest  = errors.New("mpz: guest")
 )
