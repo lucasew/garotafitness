@@ -75,9 +75,14 @@ package magic2
 //	RVA 0x1000 ↔ VA 0x140001000. Entry 0x140043914.
 //	x86 twin: ImageBase 0x400000, .text file 0x400 ↔ RVA 0x1000.
 //
-//	state is a 32-bit rANS register. First payload dword after
-//	DH(n 0x1f is that state, big-endian (fg-06 0x20000000,
-//	fg-02 0xc0037700).
+//	state is a 32-bit rANS register. 0x14002973b does
+//	movl (%src),%r10d into 0xe4(%rsp) — little-endian
+//	(fg-06 0x00000020, fg-02 0x007703c0). No renorm runs
+//	between that store and the first token at 0x140029e04;
+//	the first getBit uses the raw dword (slot 0x20).
+//	0xb40/0xb48 is a second rANS used by decodeOpt @
+//	0x14003afc0 (scale-15 bit + 16-sym, adapt >>5 / 0x2980,
+//	ids at 0xa6a7/0xa6b7). Main loop reloads state from 0xb38.
 //
 //	renorm:
 //	    while state < 1<<23 {
