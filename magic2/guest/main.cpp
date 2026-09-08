@@ -402,7 +402,15 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
       if (b < 0) return -1;
       extra = (extra << 1) | (uint32_t)b;
     }
-    return d + (int)extra;
+    d += (int)extra;
+#ifdef HOST_DEBUG
+    static int nrep0;
+    if (nrep0 < 8) {
+      fprintf(stderr, "newoff5 s=%d nbits=%d d=%d x=%08x\n", s, nbits, d, r->x);
+      nrep0++;
+    }
+#endif
+    return d;
   }
   // 0x140036dbf: 16-sym at cdf+s*34+0x4a4, adapt >>6 / 0x1f00.
   int s2 = get_nibble(r, mid + s * 16, 16, 6, kMatchTgt);
@@ -421,7 +429,15 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
   if (s3 < 0) return -1;
   int bit = get_bit(r, &bp[s * 16 + s2], 14, 5);
   if (bit < 0) return -1;
-  return d + 2 * s3 + bit;
+  d += 2 * s3 + bit;
+#ifdef HOST_DEBUG
+  static int nrep;
+  if (nrep < 8) {
+    fprintf(stderr, "newoff s=%d nbits=%d s2=%d s3=%d d=%d x=%08x\n", s, nbits, s2, s3, d, r->x);
+    nrep++;
+  }
+#endif
+  return d;
 }
 
 // ROLZ lists at obj+0xc90 / cursors +0x88 / cap +0xc28.
@@ -901,6 +917,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       int s1 = get_sym8_tgt(&r, off8b + brow * 8, kLen8Tgt, 7);
       if (s1 < 0) break;
       extra = s1 + s0 * 8;
+      if (extra < 1) extra = 1;
     } else if (cls == 2) {
       int brow = bitlen((uint32_t)rep0) % 32;
       extra = decode_new_off(&r, off2A, off2B + brow * 16, &offW2, off2Esc, off2Bp, kA6E7,
@@ -912,14 +929,12 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
                             (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
     } else if (cls == 11) {
-      // 0x140039c1d: length then ROLZ index. 5th arg low byte = prev.
-      // Helpers are past-image; consume a 8-sym + 16-sym (small) so the
-      // first hit (one entry in list[prev]) can be idx 0 → dist 1.
-      int lrow = esi * 16 + hist;
-      if (lrow >= nLen) lrow = nLen - 1;
-      int ln = get_sym8(&r, lenTab + lrow * 8);
+      // Consume two decode_int (CDF +0x9b200 / +0x9bbb2) then ROLZ lookup.
+      int ln = decode_new_off(&r, off11A, off11B, &off11W, off11Esc, off11Bp, kA706,
+                              (int)sizeof(kA706), off11Mid, off11Tail);
       if (ln < 0) break;
-      int idx = get_nibble(&r, off11A, 16, 6, kMatchTgt);
+      int idx = decode_new_off(&r, off3A, off3B, &offW11, off3Esc, off3Bp, kA706,
+                               (int)sizeof(kA706), off3Mid, off3Tail);
       if (idx < 0) break;
       extra = rolz_lookup(prev, idx, n);
       m_fixed = ln + 2;
