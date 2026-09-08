@@ -159,7 +159,8 @@ package magic2
 //	0xa2b0/0xa260 update esi (p0 context), not the 99-compare.
 //	p0 cell is model+0xb50+(hist<<6)+esi*4; ctor +0x60=0 so esi
 //	starts at 0. After lit esi=a260[esi]; after match a2b0[esi].
-//	First bit 1 = match @ 0x14002a539 → decodeMatch.
+//	First bit 1 = match @ 0x14002a539 → decodeMatch
+//	(class CDF model+0x1240+hist*544+esi*34, adapt >>6 / 0x1f00).
 //	Literal @ 0x14002b7e9 mixes two 16-sym CDFs (row stride 34):
 //	hi A model+(hist*17<<7)+(prev>>blr)*34
 //	hi B model+(hist*17<<9)+(prev>>blo)*34+0x26c80
