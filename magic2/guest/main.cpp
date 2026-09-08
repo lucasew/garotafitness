@@ -392,6 +392,12 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
   if (s >= ntab) s = ntab - 1;
   int nbits = nbtab[s];
   if (nbits > 24) nbits = 24;
+  // 0x140036db2: nbits>5 decodes another 16-sym at +0x4a4 before the bits.
+  if (nbits > 5) {
+    int s2 = get_nibble(r, esc, 16, 5, kHdrTgt);
+    if (s2 < 0) return -1;
+    (void)s2;
+  }
   uint32_t extra = 0;
   for (int i = 0; i < nbits; i++) {
     int b = get_bit(r, &bits[(i + nbit) & 4095], 14, 5);
