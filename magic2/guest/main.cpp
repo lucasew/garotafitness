@@ -143,6 +143,45 @@ static int find16(const uint16_t *cdf, uint32_t slot, int last) {
   return last;
 }
 
+// v22 0x14002b8e6: mixed = (w*A + (uint16)(0-w)*B) >> 16  (pmulhuw+paddw)
+static void mix_cdf(uint16_t *mixed, const uint16_t *A, const uint16_t *B, uint16_t w) {
+  uint16_t nw = (uint16_t)(0u - w);
+  for (int i = 0; i < 16; i++) {
+    mixed[i] = (uint16_t)((((uint32_t)w * A[i]) >> 16) + (((uint32_t)nw * B[i]) >> 16));
+  }
+}
+
+static int get_nibble_mix(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, int last, int shift,
+                          const uint16_t tgt[][16]) {
+  if (!r->ok) return -1;
+  uint16_t mixed[16];
+  uint16_t w = *wp;
+  mix_cdf(mixed, A, B, w);
+  uint32_t slot = r->x & (kMN - 1);
+  uint32_t quo = r->x >> 15;
+  int i = find16(mixed, slot, last);
+  uint32_t start = mixed[i - 1];
+  uint32_t end = (i < 16) ? mixed[i] : 0x8000;
+  if (end <= start) end = start + 1;
+  r->x = (end - start) * quo + (slot - start);
+  int sym = i - 1;
+  uint16_t fA, fB;
+  if (i < 16) {
+    fA = (uint16_t)(A[i] - A[i - 1]);
+    fB = (uint16_t)(B[i] - B[i - 1]);
+  } else {
+    fA = (uint16_t)(0x8000 - A[15]);
+    fB = (uint16_t)(0x8000 - B[15]);
+  }
+  uint16_t w2 = (uint16_t)(w - (w >> 4));
+  if (fA >= fB) w2 = (uint16_t)(w2 + 0x0fff);
+  *wp = w2;
+  adapt16(A, sym, tgt, shift);
+  adapt16(B, sym, tgt, shift);
+  renorm(r);
+  return sym;
+}
+
 static int get_nibble(Rans *r, uint16_t *cdf, int last, int shift, const uint16_t tgt[][16]) {
   if (!r->ok) return -1;
   uint32_t slot = r->x & (kMN - 1);
@@ -369,7 +408,7 @@ static int ctx_lo_pe(int prev, int hi) {
   return hi;
 }
 
-static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
+static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int use_second) {
   if (slen < 4) return 0;
   Rans r;
   r.buf = src;
@@ -379,16 +418,24 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   r.x = ((uint32_t)src[0] << 24) | ((uint32_t)src[1] << 16) | ((uint32_t)src[2] << 8) | src[3];
   renorm(&r);
   const int nHi = 16384, nLo = 4096, nCls = 256, nLen = 256, nBM = 64;
-  static uint16_t hiTab[16384 * 16];
-  static uint16_t loTab[4096 * 16];
+  static uint16_t hiA[16384 * 16];
+  static uint16_t hiB[256 * 16];
+  static uint16_t loA[64 * 16];
+  static uint16_t loB[256 * 16];
   static uint16_t clsTab[256 * 16];
   static uint16_t lenTab[256 * 8];
   static uint16_t bmTab[64];
-  for (int i = 0; i < nHi; i++) init_nibble(hiTab + i * 16);
-  for (int i = 0; i < nLo; i++) init_nibble(loTab + i * 16);
+  static uint16_t wHi[256];
+  static uint16_t wLo[64];
+  for (int i = 0; i < nHi; i++) init_nibble(hiA + i * 16);
+  for (int i = 0; i < 256; i++) init_nibble(hiB + i * 16);
+  for (int i = 0; i < 64; i++) init_nibble(loA + i * 16);
+  for (int i = 0; i < 256; i++) init_nibble(loB + i * 16);
   for (int i = 0; i < nCls; i++) init_nibble(clsTab + i * 16);
   for (int i = 0; i < nLen; i++) init_sym8(lenTab + i * 8);
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
+  for (int i = 0; i < 256; i++) wHi[i] = 0x8000;
+  for (int i = 0; i < 64; i++) wLo[i] = 0x8000;
   uint16_t litP[512];
   for (int i = 0; i < 512; i++) litP[i] = kMB / 2;
   int n = 0, prev = 0, rep0lit = 0, rep0 = 1;
@@ -400,15 +447,19 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
     int bit = get_bit(&r, &litP[pctx], 14, 5);
     if (bit < 0) break;
     int tok = bit; // 0=lit 1=match; 2=DXT if second bit
-    if (bit == 0 && mix < 0x63) {
+    if (use_second && bit == 0 && mix < 0x63) {
       int b2 = get_bit(&r, &litP[pctx + 1], 14, 5);
       if (b2 < 0) break;
       if (b2 == 1) tok = 2;
     }
     if (tok == 0) {
-      int hi = get_nibble(&r, hiTab + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 6, kMatchTgt);
+      int ha = ctx_hi(prev, rep0lit, n) % nHi;
+      int hb = prev & 255;
+      int hi = get_nibble_mix(&r, hiA + ha * 16, hiB + hb * 16, &wHi[hb], 16, 6, kMatchTgt);
       if (hi < 0) break;
-      int lo = get_nibble(&r, loTab + (ctx_lo_pe(prev, hi) % nLo) * 16, 16, 7, kNibbleTgt);
+      int la = ctx_lo_pe(prev, hi) % 64;
+      int lb = prev & 255;
+      int lo = get_nibble_mix(&r, loA + la * 16, loB + lb * 16, &wLo[la], 16, 7, kNibbleTgt);
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
       dst[n++] = b;
@@ -429,7 +480,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
           extra = extra * 2 + b;
         }
       } else if (cls == 1 || cls == 2 || cls == 3 || cls == 11) {
-        int d = get_nibble(&r, hiTab + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
+        int d = get_nibble(&r, hiA + (ctx_hi(prev, rep0lit, n) % nHi) * 16, 16, 7, kNibbleTgt);
         if (d < 0) break;
         extra = d + 1;
       }
@@ -465,12 +516,13 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
 
 extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (!src || slen < 4 || !dst || dcap <= 0) return 0;
-  int n = decode_v22(src, slen, dst, dcap);
+  int n = decode_v22(src, slen, dst, dcap, 1);
+  if (hit_crc(dst, n)) return n;
+  n = decode_v22(src, slen, dst, dcap, 0);
   if (hit_crc(dst, n)) return n;
   n = decode_iir(src, slen, dst, dcap, 5);
   if (hit_crc(dst, n)) return n;
   n = decode_iir(src, slen, dst, dcap, 4);
   if (hit_crc(dst, n)) return n;
-  // still return v22 bytes so first-16 probes can see the token path
-  return decode_v22(src, slen, dst, dcap);
+  return decode_v22(src, slen, dst, dcap, 1);
 }

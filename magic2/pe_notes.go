@@ -147,6 +147,16 @@ package magic2
 //	-rt is dead since ~v19j. ldmf is the optional long-distance
 //	path (magic2l only).
 //
+//	v22 LZ token @ 0x140029e04: scale 14 adapt >>5. Mixer byte
+//	from [obj+0x70][hist] compared to 0x63 (not v20's 9). If
+//	below, a second >>5 bit on p0+2: 0=still literal, 1=DXT
+//	(al=2). First bit 1 = match @ 0x14002a539 → decodeMatch.
+//	Literal @ 0x14002b7e9 mixes two 16-sym CDFs:
+//	mixed = (w*A + (uint16)(0-w)*B)>>16 (pmulhuw+paddw),
+//	find on mixed, w -= w>>4; if freqA>=freqB { w += 0xfff }.
+//	Hi adapt >>6 toward 0x1f00; lo >>7 toward 0x1c00.
+//	Store: (hi<<4)|lo at [dict+pos] (0x14002bcf7).
+//
 //	See fcm.go for getBit / getNibble.
 //
 // DH(n is not stored as a C string in the image (no hit for those
