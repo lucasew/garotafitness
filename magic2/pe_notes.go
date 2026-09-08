@@ -82,7 +82,15 @@ package magic2
 //	the first getBit uses the raw dword (slot 0x20).
 //	0xb40/0xb48 is a second rANS used by decodeOpt @
 //	0x14003afc0 (scale-15 bit + 16-sym, adapt >>5 / 0x2980,
-//	ids at 0xa6a7/0xa6b7). Main loop reloads state from 0xb38.
+//	ids at 0xa6a7/0xa6b7). Init 0x14003edb0: p0=0x4000,
+//	CDF i*0x800 at +0x10/+0x32, [model+0x4a58]=0.
+//	Caller 0x140028c3d (rcx=obj, rdx=&opt; rel32 lands
+//	past .text at 0x140063002). No other E8/E9 to 0x14003afc0.
+//	Only +0xb38 write is 0x14002908e: movq %r9, 0xb38(%r12)
+//	with r9 = stream.base+pos (reads at 0x140029729 / ldmf
+//	0x1400377b4). After one fg-06 decodeOpt bit+16-sym,
+//	0xb48 is payload+7 (state 0x20, renorm 02 00 25, sym 0);
+//	main loop reloads the LE dword at that pointer.
 //
 //	renorm:
 //	    while state < 1<<23 {

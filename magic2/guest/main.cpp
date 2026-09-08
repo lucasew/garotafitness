@@ -15,6 +15,9 @@ static const int kWant = 430889;
 static const int kEmu = 2895;
 static const int kApp = 6;
 static const uint32_t kAppCRC = 0xf75982bb;
+// One decodeOpt @ 0x14003afc0 on fg-06: scale-15 bit + 16-sym, then 0xb48.
+// PE: p0=0x4000 idx=0, CDF i*0x800, LE state 0x20, renorm 02 00 25 → off=7.
+static const int kOptSkip = 7;
 
 static const uint16_t kNibbleTgt[16][16] = {
     {0x0000, 0x8007, 0x800f, 0x8017, 0x801f, 0x8027, 0x802f, 0x8037, 0x803f, 0x8047, 0x804f, 0x8057, 0x805f, 0x8067, 0x806f, 0x8077},
@@ -599,9 +602,11 @@ static int ctx_lo_pe(int prev, int hi) {
   return hi;
 }
 
-// 0x14003afc0: in-stream option header on the same rANS state as the LZ loop.
-// Scale-15 bit (p at model[idx], idx at +0x4a58), then 16-sym at +0x10
-// (escape 15 → second 16-sym at +0x32). Extra integers use scale-15 >>4 bits.
+// 0x14003afc0 decodeOpt: separate rANS at 0xb40/0xb48, not the LZ 0xb38.
+// Scale-15 bit (p at model[idx], idx at +0x4a58=0, p0=0x4000), then 16-sym
+// at +0x10 (escape 15 → +0x32). Caller 0x140028c3d (rel32 past image).
+// Only +0xb38 write is 0x14002908e: movq %r9, 0xb38(%r12) from stream.pos.
+// After bit+16-sym, 0xb48 is payload+7; LZ reloads LE dword there.
 static int decode_opt_header(Rans *r) {
   uint16_t ptab[2] = {0x4000, 0x4000};
   int idx = 0;
@@ -642,7 +647,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   if (use_hdr) {
     if (decode_opt_header(&r) < 0) return 0;
     if (use_hdr == 2 && r.off + 4 <= r.len) {
-      // After decodeOpt, 0xb38 may be the advanced 0xb48; reload LE dword.
+      // Reload LE dword at the advanced 0xb48 (same as kOptSkip on a fresh rANS).
       r.x = (uint32_t)r.buf[r.off] | ((uint32_t)r.buf[r.off + 1] << 8) |
             ((uint32_t)r.buf[r.off + 2] << 16) | ((uint32_t)r.buf[r.off + 3] << 24);
       r.off += 4;
@@ -847,10 +852,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 
 extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (!src || slen < 4 || !dst || dcap <= 0) return 0;
-  // Main loop reloads state from 0xb38; option header is a separate rANS.
-  int n = decode_v22(src, slen, dst, dcap, 1, 0, 0);
+  // 0xb38 is the src after one decodeOpt (0xb48 @ payload+7). Fresh LE dword.
+  int n = decode_v22(src, slen, dst, dcap, 1, 0, kOptSkip);
   if (hit_crc(dst, n)) return n;
-  n = decode_v22(src, slen, dst, dcap, 1, 0, 22);
+  n = decode_v22(src, slen, dst, dcap, 1, 0, 0);
   if (hit_crc(dst, n)) return n;
   n = decode_v22(src, slen, dst, dcap, 0, 0, 0);
   if (hit_crc(dst, n)) return n;
@@ -906,10 +911,10 @@ int main(int argc, char **argv) {
   static uint8_t src[93116];
   int slen = (int)fread(src, 1, sizeof(src), f);
   fclose(f);
+  try_one(src, slen, 0, 0, kOptSkip);
   try_one(src, slen, 0, 0, 0);
   try_one(src, slen, 0, 1, 0);
   try_one(src, slen, 0, 2, 0);
-  try_one(src, slen, 0, 0, 22);
   for (int skip = 0; skip <= 16; skip++) try_one(src, slen, skip, 0, 0);
   return 2;
 }
