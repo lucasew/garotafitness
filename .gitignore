@@ -3,3 +3,6 @@
 *.wasm
 !srep/srepdec.wasm
 !magic2/magic2dec.wasm
+!mpzz/mpzzdec.wasm
+!rzw/rzwdec.wasm
+!mpz/mpzdec.wasm
