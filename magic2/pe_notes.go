@@ -214,6 +214,25 @@ package magic2
 //	  First fg-06 escape: slot 0x7a03 → 15, esc slot 0x4a03 → 9,
 //	  extra 24, m=34. Without the esc-15 arm, first cls11 is at
 //	  n=41; with it, n=63. c34=0 cannot emit cls11.
+//
+//	RetDec v5.0 (mise exec github:avast/retdec) on the carved PEs
+//	(/tmp/retdec-lolz/*.c). Confirms, does not change, the map:
+//	  decode_int 0x140036b00: (obj, state*, src**, A, widx, lookback).
+//	    B = A+0x44+bitlen(lookback)*34; w = A+0x484+widx*2.
+//	    nbits<6 → 0x14006d0d4; else s2 at A+s*34+0x4a4 >>6/0x1f00,
+//	    shift = nbits>=9 ? (nbits+60)&63 : 5; nbits>=10 raw<<5;
+//	    s3 at +s2*1088+0x8e4 >>7/0x1c00; bit scale-14 at +0x4ce4;
+//	    return base + (s2<<sh) + raw + 2*s3 + bit.
+//	  decodeMatch class: A at +0x1240+esi*544+hist*34, unmixed,
+//	    jmp 0xa8c0. Length 8-sym ln==7 → 0x14006f8ad.
+//	  cls3 length: unknown_14006f962(A=+0x276a6+(hist==0)*34+
+//	    68*(bitlen>>2), B=+0x311c6+34*(bitlen>>2)).
+//	  cls2 length: p0 +0x21ca2+hist*32+(hist==0)*2+(bitlen&~3).
+//	  ctor +0xc34 (3124): lists at +0xc90 and model at +0xb68
+//	    (2920) only if c34!=0. Main model +0xb50 always
+//	    VirtualAlloc 0xe5fe8. Literal mix matches pe_notes
+//	    (hi A hist*2176, B +0x26c80, w +0xc1e80+prev>>bm*2336).
+//	  x86 twin 0x42f200: same 0x4a42a+(idx?544)+esi*0x2200.
 //	Class 10: 16-sym at +0x364ca, then a697[sym] as rep index
 //	  ({4,5,6,7,8,9,10,11,12,13,14,15,16,19,20,21}).
 //	Literal @ 0x14002b7e9 mixes two 16-sym CDFs (row stride 34):
