@@ -830,11 +830,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (extra < 0) break;
     } else if (cls == 3) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      // Both in-image helpers share the 0xa706 small-int table for the
-      // first 16-sym (0xa6e7 is the long +0xbe0 ladder; using it at n=21
-      // yields 16k distances). cls3 long path still escape-extends s.
-      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, offBits + 2048, hist * 16, kA706,
-                            (int)sizeof(kA706));
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, offBits + 2048, hist * 16, kA6E7,
+                            (int)sizeof(kA6E7));
       if (extra < 0) break;
     } else if (cls == 11) {
       int brow = bitlen((uint32_t)rep0) % 32;
