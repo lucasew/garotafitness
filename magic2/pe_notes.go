@@ -135,9 +135,9 @@ package magic2
 //	         adapt >>6 toward 0x140001f00, CDF at model+0x1240,
 //	         jmp 0x14000a8c0).
 //	         cmp r15, 0xb / ja 0x14003a3a0: cls 12-15 are
-	         reps[cls-12] rotate-to-front, length 2
-	         (movl $2,%ebx @ 0x14003a3f6), esi via 0xa280.
-	         class 0 = reuse *rep0 (0x14003a374). There is no
+//	         reps[cls-12] rotate-to-front, length 2
+//	         (movl $2, ebx at 0x14003a3f6), esi via 0xa280.
+//	         class 0 = reuse *rep0 (0x14003a374). There is no
 //	         standalone binary bit "0=new / 1=rep0" — that
 //	         polarity is not in the PE. class 4..10 index
 //	         extraBitsA690 at 0x14000a690 (cls-4) and rotate
