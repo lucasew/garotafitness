@@ -84,13 +84,15 @@ package magic2
 //	0x14003afc0 (scale-15 bit + 16-sym, adapt >>5 / 0x2980,
 //	ids at 0xa6a7/0xa6b7). Init 0x14003edb0: p0=0x4000,
 //	CDF i*0x800 at +0x10/+0x32, [model+0x4a58]=0.
-//	Caller 0x140028c3d (rcx=obj, rdx=&opt; rel32 lands
-//	past .text at 0x140063002). No other E8/E9 to 0x14003afc0.
-//	Only +0xb38 write is 0x14002908e: movq %r9, 0xb38(%r12)
-//	with r9 = stream.base+pos (reads at 0x140029729 / ldmf
-//	0x1400377b4). After one fg-06 decodeOpt bit+16-sym,
-//	0xb48 is payload+7 (state 0x20, renorm 02 00 25, sym 0);
-//	main loop reloads the LE dword at that pointer.
+//	Caller 0x140028c3d (rcx=obj, rdx=&opt; E8 thunk
+//	0x140063002). After return: movb al, 0x64(%r12) so
+//	opt is hist-row n; then 0x5a98[opt] → +0xc39 (pc mask)
+//	when opt < 0x25. Only +0xb38 write is 0x14002908e:
+//	movq %r9, 0xb38(%r12) with r9 = stream.base+pos (pos
+//	zeroed at 0x140028c16). After one fg-06 decodeOpt
+//	bit+16-sym, 0xb48 is payload+7 (state 0x20, renorm
+//	02 00 25, sym 0 → opt=0); LZ reloads a fresh LE
+//	dword from +0xb38 (stream pos 0), not +0xb48.
 //
 //	renorm:
 //	    while state < 1<<23 {
@@ -132,7 +134,10 @@ package magic2
 //	match:   16-sym class at 0x140039ae0 (add 0x10000 + bsf,
 //	         adapt >>6 toward 0x140001f00, CDF at model+0x1240,
 //	         jmp 0x14000a8c0).
-//	         class 0 = reuse *rep0 (0x14003a374). There is no
+//	         cmp r15, 0xb / ja 0x14003a3a0: cls 12-15 are
+	         reps[cls-12] rotate-to-front, length 2
+	         (movl $2,%ebx @ 0x14003a3f6), esi via 0xa280.
+	         class 0 = reuse *rep0 (0x14003a374). There is no
 //	         standalone binary bit "0=new / 1=rep0" — that
 //	         polarity is not in the PE. class 4..10 index
 //	         extraBitsA690 at 0x14000a690 (cls-4) and rotate
@@ -188,9 +193,11 @@ package magic2
 //	  movl ebp,[+0x44] (reps[17]).
 //	Class 2/3 new offset: call 0x140073fc9 / 0x14007396f (past
 //	  .text VSz). x86 twins 0x45ed6f / 0x45e660 are also past.
-//	  Same shape as in-image 0x140036b00: 16-sym slot (escape 15),
-//	  then nbits extra scale-14 >>5 bits. offset=(1<<nbits)+extra.
-//	  cls2 model+0x225c2; cls3 model+0x313e6.
+//	  Same shape as in-image 0x140036b00: 16-sym slot (escape 15).
+//	  +0xbe0 from 0xa6e7, +0xc00 from 0xa706 (8-byte
+//	  {base56, nbits8}); offset = base[s] + extra(nbits).
+//	  nbits>5 takes a second 16-sym. cls2 model+0x225c2;
+//	  cls3 model+0x313e6.
 //	  cls2 length: binary at +0x21ca2+(bsr(off)+1 & ~3), +3.
 //	  cls3 length: helper + 5.
 //	Class 10: 16-sym at +0x364ca, then a697[sym] as rep index

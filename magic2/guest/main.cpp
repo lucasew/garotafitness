@@ -208,7 +208,7 @@ static const uint8_t kEsiTab[336] = {
 static int esi_after_match(int esi, int cls) {
   int add = 16;
   if (cls == 0) add = 48;
-  else if (cls >= 4 && cls <= 10) add = 32;
+  else if ((cls >= 4 && cls <= 10) || (cls >= 12 && cls <= 15)) add = 32;
   int i = esi + add;
   if (i < 0) i = 0;
   if (i >= 336) i = 335;
@@ -350,23 +350,44 @@ static int get_sym8_tgt(Rans *r, uint16_t *cdf, const uint16_t tgt[][8], int shi
 
 static int get_sym8(Rans *r, uint16_t *cdf) { return get_sym8_tgt(r, cdf, kLen8Tgt, 7); }
 
-// cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
-// x86 twins 0x45ed6f / 0x45e660 are also past .text. In-image twin
-// 0x140036b00: mixed 16-sym (A at r9, B at r9+bitlen*34+0x44, adapt >>5
-// toward 0x2980), escape 15 → second 16-sym at r9+0x22, then nbits
-// extra scale-14 >>5 bits. offset = (1<<nbits)+extra (min 1).
-static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
-                          uint16_t *bits, int nbit) {
-  (void)B;
-  (void)wp;
-  int s = get_nibble(r, A, 16, 6, kMatchTgt);
-  if (s < 0) return -1;
-  int nbits = s;
-  if (s == 15) {
-    int s2 = get_nibble(r, esc, 16, 6, kMatchTgt);
-    if (s2 < 0) return -1;
-    nbits = 15 + s2;
+// 0x14003bb93 builds obj+0xbe0 from 0xa6e7 (8-byte {base56, nbits8}).
+// 0x14003bc18 builds obj+0xc00 from 0xa706. decode_int @ 0x140036d93:
+// offset = base[s] + extra(nbits[s]), not (1<<s)+extra.
+static const uint8_t kA6E7[] = {
+    5, 5, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+    5, 6, 7, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30,
+};
+static const uint8_t kA706[] = {
+    0, 0, 0, 1, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6,
+    2, 2, 2, 3, 3, 4, 5, 6, 4, 4, 4, 4, 5, 5, 6, 7,
+    8, 9, 10, 11, 12, 13, 14, 15,
+};
+
+static int be0_base(const uint8_t *nb, int ntab, int s) {
+  int b = 0;
+  if (s > ntab) s = ntab;
+  for (int i = 0; i < s; i++) {
+    int n = nb[i];
+    if (n >= 30) break;
+    b += 1 << n;
   }
+  return b;
+}
+
+// cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
+// In-image twin 0x140036b00: mixed 16-sym, adapt >>5 / 0x2980, escape 15.
+static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
+                          uint16_t *bits, int nbit, const uint8_t *nbtab, int ntab) {
+  int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
+  if (s < 0) return -1;
+  if (s == 15) {
+    int s2 = get_nibble(r, esc, 16, 5, kHdrTgt);
+    if (s2 < 0) return -1;
+    s = 15 + s2;
+  }
+  if (s < 0) s = 0;
+  if (s >= ntab) s = ntab - 1;
+  int nbits = nbtab[s];
   if (nbits > 24) nbits = 24;
   uint32_t extra = 0;
   for (int i = 0; i < nbits; i++) {
@@ -374,8 +395,7 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
     if (b < 0) return -1;
     extra = (extra << 1) | (uint32_t)b;
   }
-  if (nbits <= 0) return 1;
-  int d = (int)((1u << nbits) + extra);
+  int d = be0_base(nbtab, ntab, s) + (int)extra;
   if (d < 1) d = 1;
   return d;
 }
@@ -485,9 +505,10 @@ static int decode_off(int cls, int extra, int *rep0, int *reps, int nrep) {
     if (*rep0 < 1) *rep0 = 1;
     return *rep0;
   }
-  if (cls >= 4 && cls <= 10) {
+  if ((cls >= 4 && cls <= 10) || (cls >= 12 && cls <= 15)) {
     int idx = extra;
-    if (cls != 10) idx = kA690[cls - 4];
+    if (cls >= 12) idx = cls - 12;
+    else if (cls != 10) idx = kA690[cls - 4];
     if (idx >= 0 && idx < nrep) {
       int d = reps[idx];
       if (idx > 0) {
@@ -625,13 +646,13 @@ static int decode_opt_header(Rans *r) {
     opt = kA6B7[s2 & 15];
   }
 #ifdef HOST_TRACE
-  fprintf(stderr, "hdr bit=%d s=%d opt=%02x x=%08x\n", bit, s, opt, r->x);
+  fprintf(stderr, "hdr bit=%d s=%d opt=%02x x=%08x off=%d\n", bit, s, opt, r->x, r->off);
 #endif
-  (void)opt;
-  return 0;
+  return opt;
 }
 
-static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int use_second, int use_hdr, int opt_skip = 0) {
+static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int use_second, int use_hdr, int opt_skip = 0,
+                      int force_opt = -1) {
   if (opt_skip < 0) opt_skip = 0;
   if (slen < opt_skip + 4) return 0;
   src += opt_skip;
@@ -644,8 +665,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   // PE 0x14002973b: movl (%rax),%r10d stores the LE dword to 0xe4(%rsp).
   // There is no renorm between that store and the first token at 0x140029e04.
   r.x = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+  int hdr_opt = 0;
   if (use_hdr) {
-    if (decode_opt_header(&r) < 0) return 0;
+    hdr_opt = decode_opt_header(&r);
+    if (hdr_opt < 0) return 0;
     if (use_hdr == 2 && r.off + 4 <= r.len) {
       // Reload LE dword at the advanced 0xb48 (same as kOptSkip on a fresh rANS).
       r.x = (uint32_t)r.buf[r.off] | ((uint32_t)r.buf[r.off + 1] << 8) |
@@ -669,6 +692,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t off3A[16];
   static uint16_t off3B[32 * 16];
   static uint16_t off3Esc[16];
+  static uint16_t cls10Tab[16];
   static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
   static uint16_t offBits[4096];
   static uint16_t bmTab[64];
@@ -690,6 +714,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   init_nibble(off2Esc);
   init_nibble(off3A);
   init_nibble(off3Esc);
+  init_nibble(cls10Tab);
   offW2 = offW3 = offW11 = 0x8000;
   for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
@@ -700,7 +725,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   int n = 0, prev = 0, rep0lit = 0, rep0 = 1, esi = 0;
   int reps[32];
   for (int i = 0; i < 32; i++) reps[i] = 1;
-  const int opt_n = 0; // [obj+0x64] ctor default
+  // 0x140028c49: movb al, 0x64(%r12) after decodeOpt. 0x5a98[opt] → +0xc39.
+  int opt_n = force_opt >= 0 ? force_opt : (use_hdr ? hdr_opt : 0);
+  if (opt_n < 0) opt_n = 0;
+  if (opt_n > 36) opt_n = 36;
   const int pc_mask = kPcMask[opt_n];
   while (n < dcap && n < kWant && r.ok) {
     if (r.x < kL && r.off >= r.len) break;
@@ -759,10 +787,12 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     int crow = hist * 16 + esi;
     if (crow >= nCls) crow = nCls - 1;
 #ifdef HOST_DEBUG
-    if (n < 6) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
+    if (n < 16) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
 #endif
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
-    if (cls < 0 || cls > 11) {
+    // PE 0x140039bf9: cmp r15, 0xb / ja 0x14003a3a0 — cls 12-15 are
+    // reps[cls-12] with rotate and immediate length 2, not an error.
+    if (cls < 0 || cls > 15) {
 #ifdef HOST_DEBUG
       fprintf(stderr, "stop cls n=%d cls=%d crow=%d x=%08x\n", n, cls, crow, r.x);
 #endif
@@ -783,18 +813,25 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       extra = s1 + s0 * 8;
     } else if (cls == 2) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off2A, off2B + brow * 16, &offW2, off2Esc, offBits, hist * 16);
+      extra = decode_new_off(&r, off2A, off2B + brow * 16, &offW2, off2Esc, offBits, hist * 16, kA706,
+                            (int)sizeof(kA706));
       if (extra < 0) break;
     } else if (cls == 3) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, offBits + 2048, hist * 16);
+      // Both in-image helpers share the 0xa706 small-int table for the
+      // first 16-sym (0xa6e7 is the long +0xbe0 ladder; using it at n=21
+      // yields 16k distances). cls3 long path still escape-extends s.
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW3, off3Esc, offBits + 2048, hist * 16, kA706,
+                            (int)sizeof(kA706));
       if (extra < 0) break;
     } else if (cls == 11) {
       int brow = bitlen((uint32_t)rep0) % 32;
-      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW11, off3Esc, offBits + 1024, esi);
+      extra = decode_new_off(&r, off3A, off3B + brow * 16, &offW11, off3Esc, offBits + 1024, esi, kA706,
+                            (int)sizeof(kA706));
       if (extra < 0) break;
     } else if (cls == 10) {
-      int s = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
+      // PE: 16-sym at model+0x364ca, not the class row. a697[sym] = index.
+      int s = get_nibble(&r, cls10Tab, 16, 6, kMatchTgt);
       if (s < 0) break;
       extra = kA697[s & 15];
     }
@@ -803,7 +840,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     if (cls == 0) {
       // 0x14003a396: class 0 length is the immediate 1, no 8-sym.
       m = 1;
-    } else if (cls == 1) {
+    } else if (cls == 1 || (cls >= 12 && cls <= 15)) {
+      // cls1: mov edi,2. cls12-15 @ 0x14003a3f6: movl $2, %ebx.
       m = 2;
     } else if (cls == 2) {
       // p0 at +0x21ca2 + (bsr(off)+1 & ~3) + hist*32 + (r13==0?2:0)
@@ -828,7 +866,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       }
     }
 #ifdef HOST_DEBUG
-    if (n < 8) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
+    if (n < 16) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
 #endif
     if (m <= 0 || dist <= 0) {
 #ifdef HOST_DEBUG
@@ -836,6 +874,16 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #endif
       break;
     }
+#ifdef HOST_DEBUG
+    if (dist > n && n > 0) {
+      static int once;
+      if (once < 3) {
+        fprintf(stderr, "oversize n=%d cls=%d m=%d dist=%d x=%08x\n", n, cls, m, dist, r.x);
+        once++;
+      }
+    }
+#endif
+    // PE dict is VirtualAlloc zeros: dist>n copies 0 (same as pos==0 wrap).
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
       dst[n] = (dist <= n) ? dst[n - dist] : 0;
       prev = dst[n];
@@ -850,12 +898,27 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   return n;
 }
 
+static int peek_opt(const uint8_t *src, int slen) {
+  if (slen < 4) return 0;
+  Rans r;
+  r.buf = src;
+  r.off = 4;
+  r.len = slen;
+  r.ok = true;
+  r.x = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+  int o = decode_opt_header(&r);
+  return o < 0 ? 0 : o;
+}
+
 extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dcap) {
   if (!src || slen < 4 || !dst || dcap <= 0) return 0;
-  // 0xb38 is the src after one decodeOpt (0xb48 @ payload+7). Fresh LE dword.
-  int n = decode_v22(src, slen, dst, dcap, 1, 0, kOptSkip);
+  int opt = peek_opt(src, slen);
+  // PE: decodeOpt writes +0x64; LZ reloads +0xb38 at stream pos 0 (separate rANS).
+  int n = decode_v22(src, slen, dst, dcap, 1, 0, 0, opt);
   if (hit_crc(dst, n)) return n;
   n = decode_v22(src, slen, dst, dcap, 1, 0, 0);
+  if (hit_crc(dst, n)) return n;
+  n = decode_v22(src, slen, dst, dcap, 1, 0, kOptSkip, opt);
   if (hit_crc(dst, n)) return n;
   n = decode_v22(src, slen, dst, dcap, 0, 0, 0);
   if (hit_crc(dst, n)) return n;
@@ -873,26 +936,33 @@ extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dca
 }
 
 #ifdef HOST_DEBUG
-static void try_one(const uint8_t *src, int slen, int skip, int hdr, int opt_skip) {
+static void try_one(const uint8_t *src, int slen, int skip, int hdr, int opt_skip, int force_opt = -1) {
   if (skip + 4 > slen) return;
   uint8_t tmp[93116];
   int nsrc = slen - skip;
   if (nsrc > (int)sizeof(tmp)) nsrc = (int)sizeof(tmp);
   memcpy(tmp, src + skip, (size_t)nsrc);
   static uint8_t dst[430889];
-  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1, hdr, opt_skip);
+  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1, hdr, opt_skip, force_opt);
   int pr = 0;
   for (int i = 0; i < n && i < 16; i++) {
     uint8_t c = dst[i];
     if (c == 9 || c == 10 || c == 13 || (c >= 32 && c < 127)) pr++;
   }
-  fprintf(stderr, "skip=%d hdr=%d opt=%d n=%d pr=%d first=", skip, hdr, opt_skip, n, pr);
+  fprintf(stderr, "skip=%d hdr=%d opt=%d force=%d n=%d pr=%d first=", skip, hdr, opt_skip, force_opt, n, pr);
   for (int i = 0; i < n && i < 16; i++) fprintf(stderr, "%02x", dst[i]);
   if (n > 0) fprintf(stderr, " ascii=%.*s", n < 16 ? n : 16, dst);
   fprintf(stderr, "\n");
   if (n >= kEmu + kApp) {
     uint32_t c = crc32_ieee(dst + kEmu, kApp);
     fprintf(stderr, "  appid=%08x %s\n", c, c == kAppCRC ? "HIT" : "");
+    if (c == kAppCRC) {
+      FILE *hf = fopen("/tmp/magic2-CRC-HIT.txt", "w");
+      if (hf) {
+        fprintf(hf, "HIT skip=%d hdr=%d opt_skip=%d force=%d n=%d crc=%08x\n", skip, hdr, opt_skip, force_opt, n, c);
+        fclose(hf);
+      }
+    }
   }
 }
 
@@ -911,11 +981,16 @@ int main(int argc, char **argv) {
   static uint8_t src[93116];
   int slen = (int)fread(src, 1, sizeof(src), f);
   fclose(f);
-  try_one(src, slen, 0, 0, kOptSkip);
+  int peeked = peek_opt(src, slen);
+  fprintf(stderr, "peek_opt=%d\n", peeked);
   try_one(src, slen, 0, 0, 0);
+  try_one(src, slen, 0, 0, 0, peeked);
+  try_one(src, slen, 0, 0, kOptSkip);
+  try_one(src, slen, 0, 0, kOptSkip, peeked);
   try_one(src, slen, 0, 1, 0);
   try_one(src, slen, 0, 2, 0);
   for (int skip = 0; skip <= 16; skip++) try_one(src, slen, skip, 0, 0);
+  for (int fo = 0; fo <= 15; fo++) try_one(src, slen, 0, 0, 0, fo);
   return 2;
 }
 #endif
