@@ -856,10 +856,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       // cls1: mov edi,2. cls12-15 @ 0x14003a3f6: movl $2, %ebx.
       m = 2;
     } else if (cls == 2) {
-      // p0 at +0x21ca2 + (bsr(off)+1 & ~3) + hist*32 + (r13==0?2:0)
-      // scale 14 adapt >>5 (0x14003a121).
+      // p0 at +0x21ca2 + (bsr(off)+1 & ~3) + hist*32 + (hist==0?2:0)
+      // scale 14 adapt >>5 (0x14003a121). r13 is hist, not prev.
       int bl = bitlen((uint32_t)dist) & ~3;
-      int bctx = (bl + (prev == 0 ? 2 : 0)) % nBM;
+      int bctx = (bl + hist * 32 + (hist == 0 ? 2 : 0)) % nBM;
       int b = get_bit(&r, &bmTab[bctx], 14, 5);
       if (b < 0) break;
       m = 3 + b;
