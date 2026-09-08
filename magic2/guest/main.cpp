@@ -699,8 +699,9 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
   static uint16_t offBits[4096];
   static uint16_t bmTab[64];
-  static uint16_t wHi[16];
-  static uint16_t wLo[16];
+  // PE hi w: +0xc1e80 + (prev>>bm)*0x920 + hist*32 + esi*2
+  static uint16_t wHi[16 * 32];
+  static uint16_t wLo[16 * 32];
   for (int i = 0; i < 16; i++) init_nibble(hiA + i * 16);
   for (int i = 0; i < 256; i++) init_nibble(hiB + i * 16);
   for (int i = 0; i < 32; i++) init_nibble(loA + i * 16);
@@ -721,8 +722,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   offW2 = offW3 = offW11 = 0x8000;
   for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
-  for (int i = 0; i < 16; i++) wHi[i] = 0x8000;
-  for (int i = 0; i < 16; i++) wLo[i] = 0x8000;
+  for (int i = 0; i < 16 * 32; i++) wHi[i] = 0x8000;
+  for (int i = 0; i < 16 * 32; i++) wLo[i] = 0x8000;
   uint16_t litP[4096];
   for (int i = 0; i < 4096; i++) litP[i] = kMB / 2;
   int n = 0, prev = 0, rep0lit = 0, rep0 = 1, esi = 0;
@@ -761,7 +762,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #ifdef HOST_TRACE
       if (n < 3) fprintf(stderr, "pre-hi n=%d x=%08x ha=%d hb=%d\n", n, r.x, ha, hb);
 #endif
-      int hi = get_nibble_mix(&r, hiA + ha * 16, hiB + hb * 16, &wHi[ha], 16, 6, kMatchTgt);
+      int wix = ha * 32 + (esi & 31);
+      int hi = get_nibble_mix(&r, hiA + ha * 16, hiB + hb * 16, &wHi[wix], 16, 6, kMatchTgt);
       if (hi < 0) break;
 #ifdef HOST_DEBUG
       if (n < 4) fprintf(stderr, "post-hi n=%d hi=%d x=%08x slot=%04x\n", n, hi, r.x, r.x & 0x7fff);
@@ -769,7 +771,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       int la = ctx_lo_pe(prev, hi);
       if (la < 0) la = 0;
       if (la > 31) la = 31;
-      int lo = get_nibble_mix(&r, loA + la * 16, loB + hb * 16, &wLo[ha], 16, 7, kNibbleTgt);
+      int lo = get_nibble_mix(&r, loA + la * 16, loB + hb * 16, &wLo[wix], 16, 7, kNibbleTgt);
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
 #ifdef HOST_DEBUG
@@ -856,7 +858,9 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (b < 0) break;
       m = 3 + b;
     } else {
-      int lrow = hist * 16 + esi;
+      // 0x140039ec8: esi*576 + hist*36 + (idx!=0)*18 + 0x3ffea
+      int lrow = esi * 16 + hist;
+      if (cls >= 5 && cls <= 10) lrow += 1;
       if (lrow >= nLen) lrow = nLen - 1;
       int ln = get_sym8(&r, lenTab + lrow * 8);
       if (ln < 0) break;
