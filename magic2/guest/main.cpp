@@ -132,6 +132,28 @@ static const uint8_t kPcMask[37] = {
     3, 3, 7, 3, 15,
 };
 
+// VA 0x14000a260 / 0x14000a2b0. After a literal/match, esi ← table[esi].
+static const uint8_t kA260[256] = {
+    0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 7, 8, 0, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 13, 13, 13, 13, 13, 10,
+    11, 11, 11, 11, 11, 11, 11, 11, 11, 11, 14, 14, 14, 14, 14, 11, 12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 14, 14, 14, 14, 14, 12,
+    15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 15, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13,
+    73, 77, 72, 76, 76, 108, 140, 75, 75, 107, 74, 74, 74, 107, 107, 73, 73, 139, 72, 72, 72, 106, 106, 106, 139, 139, 139, 69, 69, 69, 105, 145,
+    77, 112, 145, 177, 76, 177, 177, 177, 75, 177, 111, 74, 74, 144, 73, 73, 73, 110, 110, 110, 72, 144, 144, 71, 109, 70, 70, 109, 109, 143, 143, 143,
+    108, 108, 108, 108, 108, 108, 143, 143, 143, 143, 143, 176, 107, 107, 107, 176, 176, 176, 176, 176, 176, 176, 176, 106, 142, 142, 142, 142, 142, 142, 142, 105,
+    105, 104, 104, 104, 104, 104, 104, 104, 104, 141, 141, 141, 103, 103, 103, 103, 141, 141, 141, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175,
+    175, 175, 175, 140, 140, 140, 140, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 174, 174, 174, 174, 174,
+};
+static const uint8_t kA2B0[256] = {
+    13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 13, 73, 77, 72, 76, 76, 108, 140, 75, 75, 107, 74, 74, 74, 107, 107, 73,
+    73, 139, 72, 72, 72, 106, 106, 106, 139, 139, 139, 69, 69, 69, 105, 145, 77, 112, 145, 177, 76, 177, 177, 177, 75, 177, 111, 74, 74, 144, 73, 73,
+    73, 110, 110, 110, 72, 144, 144, 71, 109, 70, 70, 109, 109, 143, 143, 143, 108, 108, 108, 108, 108, 108, 143, 143, 143, 143, 143, 176, 107, 107, 107, 176,
+    176, 176, 176, 176, 176, 176, 176, 106, 142, 142, 142, 142, 142, 142, 142, 105, 105, 104, 104, 104, 104, 104, 104, 104, 104, 141, 141, 141, 103, 103, 103, 103,
+    141, 141, 141, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 175, 140, 140, 140, 140, 139, 139, 139, 139, 139, 139, 139, 139, 139,
+    139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 139, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 174, 138, 174, 138, 138, 174, 137,
+    137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 137, 173, 173, 136, 173, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136, 136,
+    173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 173, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172, 172,
+};
+
 struct Rans {
   uint32_t x;
   const uint8_t *buf;
@@ -461,28 +483,28 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   r.ok = true;
   r.x = ((uint32_t)src[0] << 24) | ((uint32_t)src[1] << 16) | ((uint32_t)src[2] << 8) | src[3];
   renorm(&r);
-  const int nHi = 16384, nLo = 4096, nCls = 256, nLen = 256, nBM = 64;
-  static uint16_t hiA[16384 * 16];
+  const int nHi = 16384, nCls = 256, nLen = 256, nBM = 64;
+  static uint16_t hiA[16 * 16];
   static uint16_t hiB[256 * 16];
-  static uint16_t loA[64 * 16];
+  static uint16_t loA[32 * 16];
   static uint16_t loB[256 * 16];
   static uint16_t clsTab[256 * 16];
   static uint16_t lenTab[256 * 8];
   static uint16_t bmTab[64];
-  static uint16_t wHi[256];
-  static uint16_t wLo[64];
-  for (int i = 0; i < nHi; i++) init_nibble(hiA + i * 16);
+  static uint16_t wHi[16];
+  static uint16_t wLo[16];
+  for (int i = 0; i < 16; i++) init_nibble(hiA + i * 16);
   for (int i = 0; i < 256; i++) init_nibble(hiB + i * 16);
-  for (int i = 0; i < 64; i++) init_nibble(loA + i * 16);
+  for (int i = 0; i < 32; i++) init_nibble(loA + i * 16);
   for (int i = 0; i < 256; i++) init_nibble(loB + i * 16);
   for (int i = 0; i < nCls; i++) init_nibble(clsTab + i * 16);
   for (int i = 0; i < nLen; i++) init_sym8(lenTab + i * 8);
   for (int i = 0; i < nBM; i++) bmTab[i] = kMB / 2;
-  for (int i = 0; i < 256; i++) wHi[i] = 0x8000;
-  for (int i = 0; i < 64; i++) wLo[i] = 0x8000;
-  uint16_t litP[512];
-  for (int i = 0; i < 512; i++) litP[i] = kMB / 2;
-  int n = 0, prev = 0, rep0lit = 0, rep0 = 1;
+  for (int i = 0; i < 16; i++) wHi[i] = 0x8000;
+  for (int i = 0; i < 16; i++) wLo[i] = 0x8000;
+  uint16_t litP[4096];
+  for (int i = 0; i < 4096; i++) litP[i] = kMB / 2;
+  int n = 0, prev = 0, rep0lit = 0, rep0 = 1, esi = 0;
   int reps[4] = {1, 1, 1, 1};
   const int opt_n = 0; // [obj+0x64] ctor default
   const int pc_mask = kPcMask[opt_n];
@@ -490,7 +512,9 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     if (r.x < kL && r.off >= r.len) break;
     int hist = kHistTab[opt_n][n & pc_mask];
     int mix = kMixTab[hist];
-    int pctx = (prev & 255) * 2;
+    // p0 at model+0xb50 + (hist<<6) + esi*4  (0x140029e53)
+    int pctx = hist * 32 + esi * 2;
+    if (pctx < 0 || pctx + 1 >= 4096) break;
     int bit = get_bit(&r, &litP[pctx], 14, 5);
     if (bit < 0) break;
     int tok = bit; // 0=lit 1=match; 2=DXT if mixer<99 and second bit
@@ -500,17 +524,20 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (b2 == 1) tok = 2;
     }
     if (tok == 0) {
-      int ha = ctx_hi(prev, rep0lit, n) % nHi;
+      // defaults -blr4 -blo8 -bll8 -bm4 → shifts 4,0,0,4
+      int ha = (prev >> 4) & 15;
       int hb = prev & 255;
-      int hi = get_nibble_mix(&r, hiA + ha * 16, hiB + hb * 16, &wHi[hb], 16, 6, kMatchTgt);
+      int hi = get_nibble_mix(&r, hiA + ha * 16, hiB + hb * 16, &wHi[ha], 16, 6, kMatchTgt);
       if (hi < 0) break;
-      int la = ctx_lo_pe(prev, hi) % 64;
-      int lb = prev & 255;
-      int lo = get_nibble_mix(&r, loA + la * 16, loB + lb * 16, &wLo[la], 16, 7, kNibbleTgt);
+      int la = ctx_lo_pe(prev, hi);
+      if (la < 0) la = 0;
+      if (la > 31) la = 31;
+      int lo = get_nibble_mix(&r, loA + la * 16, loB + hb * 16, &wLo[ha], 16, 7, kNibbleTgt);
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
       dst[n++] = b;
       prev = rep0lit = b;
+      esi = kA260[esi];
       continue;
     }
     if (tok == 2) {
@@ -561,6 +588,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       n++;
     }
     if (n > 0) rep0lit = dst[n - 1];
+    esi = kA2B0[esi];
   }
   return n;
 }

@@ -157,10 +157,19 @@ package magic2
 //	0x140005b40[min(+0x64,0x24)][pos & +0xc39]. Ctor +0x64=0
 //	and 0x5a98[0]=0, so hist=0, mixer=99, no second bit.
 //	0xa2b0/0xa260 update esi (p0 context), not the 99-compare.
+//	p0 cell is model+0xb50+(hist<<6)+esi*4; ctor +0x60=0 so esi
+//	starts at 0. After lit esi=a260[esi]; after match a2b0[esi].
 //	First bit 1 = match @ 0x14002a539 → decodeMatch.
-//	Literal @ 0x14002b7e9 mixes two 16-sym CDFs:
-//	mixed = (w*A + (uint16)(0-w)*B)>>16 (pmulhuw+paddw),
-//	find on mixed, w -= w>>4; if freqA>=freqB { w += 0xfff }.
+//	Literal @ 0x14002b7e9 mixes two 16-sym CDFs (row stride 34):
+//	hi A model+(hist*17<<7)+(prev>>blr)*34
+//	hi B model+(hist*17<<9)+(prev>>blo)*34+0x26c80
+//	hi w model+0xc1e80+(prev>>bm)*0x920+hist*32+esi*2
+//	lo A model+(hist*17<<6)+ctx_lo*34+0xe6680
+//	lo B model+(hist*17<<9)+(prev>>bll)*34+0xf9cc0
+//	lo w model+0x194ec0+(prev>>bm)*0x920+hist*32+esi*2
+//	defaults -blr4 -blo8 -bll8 -bm4. Init CDFs 0x1bc0 (i*0x800),
+//	weights 0x8000 (0xa4b0). mixed = (w*A+(uint16)(0-w)*B)>>16,
+//	w -= w>>4; if freqA>=freqB { w += 0xfff }.
 //	Hi adapt >>6 toward 0x1f00; lo >>7 toward 0x1c00.
 //	Store: (hi<<4)|lo at [dict+pos] (0x14002bcf7).
 //
