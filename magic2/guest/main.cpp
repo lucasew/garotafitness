@@ -365,6 +365,8 @@ static const uint8_t kA706[] = {
     2, 2, 2, 3, 3, 4, 5, 6, 4, 4, 4, 4, 5, 5, 6, 7,
     8, 9, 10, 11, 12, 13, 14, 15,
 };
+// VA 0x14000a6d7. +0xbc0 ladder, limit 0x1000. 0x140036646.
+static const uint8_t kA6D7[] = {3, 3, 3, 3, 3, 4, 4, 4, 5, 5, 6, 7, 8, 9, 10, 11};
 
 static int be0_base(const uint8_t *nb, int ntab, int s) {
   int b = 0;
@@ -377,10 +379,34 @@ static int be0_base(const uint8_t *nb, int ntab, int s) {
   return b;
 }
 
+static int decode_bc0(Rans *r, uint16_t *cdf8, uint16_t *bits) {
+  int s = get_sym8(r, cdf8);
+  if (s < 0) return -1;
+  if (s > 15) s = 15;
+  int nbits = kA6D7[s];
+  int d = be0_base(kA6D7, 16, s) + s; // leal -1(%rcx,%rdx) with rcx=bsf=s+1
+  if (nbits > 3) {
+    int k = nbits - 3;
+    uint32_t raw = r->x & ((1u << k) - 1);
+    r->x >>= k;
+    renorm(r);
+    d += (int)(raw * 8);
+  }
+  (void)bits;
+  return d;
+}
+
 // cls2 @ 0x14003a0c4 / cls3 @ 0x14003a02a call past the image.
 // In-image twin 0x140036b00: mixed 16-sym, adapt >>5 / 0x2980, escape 15.
 static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
                           uint16_t *bp, const uint8_t *nbtab, int ntab, uint16_t *mid, uint16_t *tail) {
+#ifdef HOST_DEBUG
+  static int nmix;
+  if (nmix < 4) {
+    fprintf(stderr, "newoff-mix slot=%04x x=%08x w=%04x\n", r->x & 0x7fff, r->x, (unsigned)*wp);
+    nmix++;
+  }
+#endif
   int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
   if (s < 0) return -1;
   if (s == 15) {
@@ -771,6 +797,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   static uint16_t off3Mid[32 * 16], off3Tail[32 * 16 * 16], off3Bp[32 * 16];
   static uint16_t off11A[16], off11B[16], off11Esc[16], off11W = 0x8000;
   static uint16_t off11Mid[32 * 16], off11Tail[32 * 16 * 16], off11Bp[32 * 16];
+  static uint16_t off11s0[8], off11s1[8];
   static uint16_t cls10Tab[16];
   static uint16_t offW2 = 0x8000, offW3 = 0x8000, offW11 = 0x8000;
   static uint16_t offBits[4096];
@@ -813,6 +840,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     init_nibble(off11Tail + i * 16);
     off11Bp[i] = kMB / 2;
   }
+  init_sym8(off11s0);
+  init_sym8(off11s1);
   init_nibble(cls10Tab);
   offW2 = offW3 = offW11 = 0x8000;
   for (int i = 0; i < 4096; i++) offBits[i] = kMB / 2;
@@ -929,12 +958,10 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
                             (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
     } else if (cls == 11) {
-      // Consume two decode_int (CDF +0x9b200 / +0x9bbb2) then ROLZ lookup.
-      int ln = decode_new_off(&r, off11A, off11B, &off11W, off11Esc, off11Bp, kA706,
-                              (int)sizeof(kA706), off11Mid, off11Tail);
+      // +0xbc0 / 0xa6d7 8-sym integer (0x140036646), then ROLZ lookup.
+      int ln = decode_bc0(&r, off11s0, off11Bp);
       if (ln < 0) break;
-      int idx = decode_new_off(&r, off3A, off3B, &offW11, off3Esc, off3Bp, kA706,
-                               (int)sizeof(kA706), off3Mid, off3Tail);
+      int idx = decode_bc0(&r, off11s1, off11Bp);
       if (idx < 0) break;
       extra = rolz_lookup(prev, idx, n);
       m_fixed = ln + 2;
