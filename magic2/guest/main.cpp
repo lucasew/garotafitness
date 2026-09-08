@@ -424,6 +424,40 @@ static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint1
   return d + 2 * s3 + bit;
 }
 
+// ROLZ lists at obj+0xc90 / cursors +0x88 / cap +0xc28.
+// Default cap = (opt[+8]<<11)+0x800 → 0x800 when dword[+8]=0.
+static const int kRolzCap = 2048;
+static uint32_t gRolz[256][2048];
+static int gRolzCur[256];
+
+static void rolz_reset(void) {
+  memset(gRolz, 0, sizeof(gRolz));
+  for (int i = 0; i < 256; i++) gRolzCur[i] = 0;
+}
+
+static void rolz_push(int ctx, int pos) {
+  ctx &= 255;
+  int c = gRolzCur[ctx];
+  gRolz[ctx][c] = (uint32_t)pos;
+  c++;
+  if (c >= kRolzCap) c = 0;
+  gRolzCur[ctx] = c;
+}
+
+static int rolz_lookup(int ctx, int idx, int n) {
+  ctx &= 255;
+  int avail = gRolzCur[ctx];
+  if (avail > kRolzCap) avail = kRolzCap;
+  if (avail < 1) return 1;
+  if (idx < 0) idx = 0;
+  idx %= avail;
+  int slot = avail - 1 - idx;
+  int pos = (int)gRolz[ctx][slot];
+  int d = n - pos;
+  if (d < 1) d = 1;
+  return d;
+}
+
 static int bitlen(uint32_t x) {
   if (x == 0) return 0;
   int n = 0;
@@ -772,6 +806,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   uint16_t litP[4096];
   for (int i = 0; i < 4096; i++) litP[i] = kMB / 2;
   int n = 0, prev = 0, rep0lit = 0, rep0 = 1, esi = 0;
+  rolz_reset();
   int reps[32];
   for (int i = 0; i < 32; i++) reps[i] = 1;
   // 0x140028c49: movb al, 0x64(%r12) after decodeOpt. 0x5a98[opt] → +0xc39.
@@ -820,9 +855,12 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
 #ifdef HOST_DEBUG
-      if (n < 4) fprintf(stderr, "lit n=%d b=%02x hi=%d lo=%d x=%08x slot=%04x esi=%d\n", n, b, hi, lo, r.x, r.x & 0x7fff, esi);
+      if (n < 40) fprintf(stderr, "lit n=%d b=%02x hi=%d lo=%d x=%08x slot=%04x esi=%d\n", n, b, hi, lo, r.x, r.x & 0x7fff, esi);
 #endif
-      dst[n++] = b;
+      dst[n] = b;
+      rolz_push(prev, n);
+      rolz_push(b, n);
+      n++;
       prev = rep0lit = b;
       esi = kEsiTab[esi];
       continue;
@@ -874,14 +912,16 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
                             (int)sizeof(kA6E7), off3Mid, off3Tail);
       if (extra < 0) break;
     } else if (cls == 11) {
-      // 0x140039c1d: helper @ +0x9b200 → length, helper @ +0x9bbb2 → off,
-      // then add $2 to length. Same decode_int prototype as cls2/3.
-      int ln = decode_new_off(&r, off11A, off11B, &off11W, off11Esc, off11Bp, kA706,
-                              (int)sizeof(kA706), off11Mid, off11Tail);
+      // 0x140039c1d: length then ROLZ index. 5th arg low byte = prev.
+      // Helpers are past-image; consume a 8-sym + 16-sym (small) so the
+      // first hit (one entry in list[prev]) can be idx 0 → dist 1.
+      int lrow = esi * 16 + hist;
+      if (lrow >= nLen) lrow = nLen - 1;
+      int ln = get_sym8(&r, lenTab + lrow * 8);
       if (ln < 0) break;
-      extra = decode_new_off(&r, off3A, off3B + (bitlen((uint32_t)rep0) % 32) * 16, &offW11, off3Esc, off3Bp,
-                            kA6E7, (int)sizeof(kA6E7), off3Mid, off3Tail);
-      if (extra < 0) break;
+      int idx = get_nibble(&r, off11A, 16, 6, kMatchTgt);
+      if (idx < 0) break;
+      extra = rolz_lookup(prev, idx, n);
       m_fixed = ln + 2;
     } else if (cls == 10) {
       // PE: 16-sym at model+0x364ca, not the class row. a697[sym] = index.
@@ -943,8 +983,11 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #endif
     // PE dict is VirtualAlloc zeros: dist>n copies 0 (same as pos==0 wrap).
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
-      dst[n] = (dist > 0 && dist <= n) ? dst[n - dist] : 0;
-      prev = dst[n];
+      uint8_t b = (dist > 0 && dist <= n) ? dst[n - dist] : 0;
+      dst[n] = b;
+      rolz_push(prev, n);
+      rolz_push(b, n);
+      prev = b;
       n++;
     }
     if (n > 0) rep0lit = dst[n - 1];
