@@ -354,11 +354,13 @@ static int get_sym8(Rans *r, uint16_t *cdf) { return get_sym8_tgt(r, cdf, kLen8T
 // extra scale-14 >>5 bits. offset = (1<<nbits)+extra (min 1).
 static int decode_new_off(Rans *r, uint16_t *A, uint16_t *B, uint16_t *wp, uint16_t *esc,
                           uint16_t *bits, int nbit) {
-  int s = get_nibble_mix(r, A, B, wp, 16, 5, kHdrTgt);
+  (void)B;
+  (void)wp;
+  int s = get_nibble(r, A, 16, 6, kMatchTgt);
   if (s < 0) return -1;
   int nbits = s;
   if (s == 15) {
-    int s2 = get_nibble(r, esc, 16, 5, kHdrTgt);
+    int s2 = get_nibble(r, esc, 16, 6, kMatchTgt);
     if (s2 < 0) return -1;
     nbits = 15 + s2;
   }
@@ -637,7 +639,15 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
   // PE 0x14002973b: movl (%rax),%r10d stores the LE dword to 0xe4(%rsp).
   // There is no renorm between that store and the first token at 0x140029e04.
   r.x = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
-  if (use_hdr && decode_opt_header(&r) < 0) return 0;
+  if (use_hdr) {
+    if (decode_opt_header(&r) < 0) return 0;
+    if (use_hdr == 2 && r.off + 4 <= r.len) {
+      // After decodeOpt, 0xb38 may be the advanced 0xb48; reload LE dword.
+      r.x = (uint32_t)r.buf[r.off] | ((uint32_t)r.buf[r.off + 1] << 8) |
+            ((uint32_t)r.buf[r.off + 2] << 16) | ((uint32_t)r.buf[r.off + 3] << 24);
+      r.off += 4;
+    }
+  }
   const int nHi = 16384, nCls = 256, nLen = 256, nBM = 64;
   static uint16_t hiA[16 * 16];
   static uint16_t hiB[256 * 16];
@@ -717,8 +727,8 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
 #endif
       int hi = get_nibble_mix(&r, hiA + ha * 16, hiB + hb * 16, &wHi[ha], 16, 6, kMatchTgt);
       if (hi < 0) break;
-#ifdef HOST_TRACE
-      if (n < 3) fprintf(stderr, "post-hi n=%d hi=%d x=%08x\n", n, hi, r.x);
+#ifdef HOST_DEBUG
+      if (n < 4) fprintf(stderr, "post-hi n=%d hi=%d x=%08x slot=%04x\n", n, hi, r.x, r.x & 0x7fff);
 #endif
       int la = ctx_lo_pe(prev, hi);
       if (la < 0) la = 0;
@@ -726,25 +736,29 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       int lo = get_nibble_mix(&r, loA + la * 16, loB + hb * 16, &wLo[ha], 16, 7, kNibbleTgt);
       if (lo < 0) break;
       uint8_t b = (uint8_t)((hi << 4) | lo);
+#ifdef HOST_DEBUG
+      if (n < 4) fprintf(stderr, "lit n=%d b=%02x hi=%d lo=%d x=%08x slot=%04x esi=%d\n", n, b, hi, lo, r.x, r.x & 0x7fff, esi);
+#endif
       dst[n++] = b;
       prev = rep0lit = b;
       esi = kEsiTab[esi];
-#ifdef HOST_TRACE
-      if (n <= 8) fprintf(stderr, "lit n=%d b=%02x x=%08x esi=%d\n", n, b, r.x, esi);
-#endif
       continue;
     }
     if (tok == 2) {
-      // PE 0x14002a066: tok==2 is DXT iff mixer<=8; else error (0x14002a620).
-      // DXT jmp 0xa880[mix] is not lifted. Either way we stop.
+#ifdef HOST_DEBUG
+      fprintf(stderr, "stop dxt n=%d mix=%d x=%08x\n", n, mix, r.x);
+#endif
       break;
     }
     // class CDF at model+0x1240 + hist*544 + esi*34 (0x140039b3a)
     int crow = hist * 16 + esi;
     if (crow >= nCls) crow = nCls - 1;
+#ifdef HOST_DEBUG
+    if (n < 6) fprintf(stderr, "pre-cls n=%d x=%08x slot=%04x crow=%d esi=%d\n", n, r.x, r.x & 0x7fff, crow, esi);
+#endif
     int cls = get_nibble(&r, clsTab + crow * 16, 16, 6, kMatchTgt);
     if (cls < 0 || cls > 11) {
-#ifdef HOST_TRACE
+#ifdef HOST_DEBUG
       fprintf(stderr, "stop cls n=%d cls=%d crow=%d x=%08x\n", n, cls, crow, r.x);
 #endif
       break;
@@ -779,7 +793,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
       if (s < 0) break;
       extra = kA697[s & 15];
     }
-    decode_off(cls, extra, &rep0, reps, 32);
+    int dist = decode_off(cls, extra, &rep0, reps, 32);
     int m;
     if (cls == 0) {
       // 0x14003a396: class 0 length is the immediate 1, no 8-sym.
@@ -789,7 +803,7 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
     } else if (cls == 2) {
       // p0 at +0x21ca2 + (bsr(off)+1 & ~3) + hist*32 + (r13==0?2:0)
       // scale 14 adapt >>5 (0x14003a121).
-      int bl = bitlen((uint32_t)rep0) & ~3;
+      int bl = bitlen((uint32_t)dist) & ~3;
       int bctx = (bl + (prev == 0 ? 2 : 0)) % nBM;
       int b = get_bit(&r, &bmTab[bctx], 14, 5);
       if (b < 0) break;
@@ -808,23 +822,26 @@ static int decode_v22(const uint8_t *src, int slen, uint8_t *dst, int dcap, int 
         m = 10 + en;
       }
     }
-#ifdef HOST_TRACE
-    fprintf(stderr, "match n=%d cls=%d extra=%d m=%d rep0=%d esi=%d hist=%d\n", n, cls, extra, m, rep0, esi, hist);
+#ifdef HOST_DEBUG
+    if (n < 8) fprintf(stderr, "match n=%d cls=%d extra=%d m=%d dist=%d rep0=%d\n", n, cls, extra, m, dist, rep0);
 #endif
-    if (m <= 0 || rep0 <= 0) {
-#ifdef HOST_TRACE
-      fprintf(stderr, "stop match n=%d cls=%d m=%d rep0=%d x=%08x off=%d\n", n, cls, m, rep0, r.x, r.off);
+    if (m <= 0 || dist <= 0) {
+#ifdef HOST_DEBUG
+      fprintf(stderr, "stop match n=%d cls=%d m=%d dist=%d x=%08x\n", n, cls, m, dist, r.x);
 #endif
       break;
     }
     for (int i = 0; i < m && n < dcap && n < kWant; i++) {
-      dst[n] = (rep0 <= n) ? dst[n - rep0] : 0;
+      dst[n] = (dist <= n) ? dst[n - dist] : 0;
       prev = dst[n];
       n++;
     }
     if (n > 0) rep0lit = dst[n - 1];
     esi = esi_after_match(esi, cls);
   }
+#ifdef HOST_DEBUG
+  fprintf(stderr, "end n=%d x=%08x off=%d ok=%d\n", n, r.x, r.off, (int)r.ok);
+#endif
   return n;
 }
 
@@ -839,6 +856,8 @@ extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dca
   if (hit_crc(dst, n)) return n;
   n = decode_v22(src, slen, dst, dcap, 1, 1, 0);
   if (hit_crc(dst, n)) return n;
+  n = decode_v22(src, slen, dst, dcap, 1, 2, 0);
+  if (hit_crc(dst, n)) return n;
   n = decode_v22(src, slen, dst, dcap, 0, 1, 0);
   if (hit_crc(dst, n)) return n;
   n = decode_iir(src, slen, dst, dcap, 5);
@@ -849,20 +868,20 @@ extern "C" int magic2_decode(const uint8_t *src, int slen, uint8_t *dst, int dca
 }
 
 #ifdef HOST_DEBUG
-static void try_one(const uint8_t *src, int slen, int skip, int hdr) {
+static void try_one(const uint8_t *src, int slen, int skip, int hdr, int opt_skip) {
   if (skip + 4 > slen) return;
   uint8_t tmp[93116];
   int nsrc = slen - skip;
   if (nsrc > (int)sizeof(tmp)) nsrc = (int)sizeof(tmp);
   memcpy(tmp, src + skip, (size_t)nsrc);
   static uint8_t dst[430889];
-  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1, hdr, 0);
+  int n = decode_v22(tmp, nsrc, dst, (int)sizeof(dst), 1, hdr, opt_skip);
   int pr = 0;
   for (int i = 0; i < n && i < 16; i++) {
     uint8_t c = dst[i];
     if (c == 9 || c == 10 || c == 13 || (c >= 32 && c < 127)) pr++;
   }
-  fprintf(stderr, "skip=%d hdr=%d n=%d pr=%d first=", skip, hdr, n, pr);
+  fprintf(stderr, "skip=%d hdr=%d opt=%d n=%d pr=%d first=", skip, hdr, opt_skip, n, pr);
   for (int i = 0; i < n && i < 16; i++) fprintf(stderr, "%02x", dst[i]);
   if (n > 0) fprintf(stderr, " ascii=%.*s", n < 16 ? n : 16, dst);
   fprintf(stderr, "\n");
@@ -887,10 +906,11 @@ int main(int argc, char **argv) {
   static uint8_t src[93116];
   int slen = (int)fread(src, 1, sizeof(src), f);
   fclose(f);
-  for (int skip = 0; skip <= 32; skip += 4) {
-    try_one(src, slen, skip, 0);
-    try_one(src, slen, skip, 1);
-  }
+  try_one(src, slen, 0, 0, 0);
+  try_one(src, slen, 0, 1, 0);
+  try_one(src, slen, 0, 2, 0);
+  try_one(src, slen, 0, 0, 22);
+  for (int skip = 0; skip <= 16; skip++) try_one(src, slen, skip, 0, 0);
   return 2;
 }
 #endif
