@@ -78,9 +78,9 @@ static void put_le64(uint8_t *p, uint64_t v) {
   put_le32(p + 4, (uint32_t)(v >> 32));
 }
 
-// Integer used at 0x10001615 (nbits=5) and 0x10016816 (nbits=3).
-// Layout: +8 u8 ctx, +0xa u8 ctx2, +0xc uint16 freq[4], +0x34 tree.
-static int get_sym(Range *r, uint8_t *base, int nbits) {
+// Layout: +0 i32 pred, +8 u8 ctx, +9 u8 ctx1, +0xa u8 ctx2, +0xc freq[4], +0x34 tree.
+// nbits 2/3/4/5. flags: 1=ctx1 sign bit (15c20/15260/167c0-5), 2=add pred.
+static int get_sym(Range *r, uint8_t *base, int nbits, int flags, int *out) {
   int ctx = base[8];
   uint16_t *freq = (uint16_t *)(base + 0x0c);
   int bit = getbit(r, &freq[ctx]);
@@ -88,9 +88,21 @@ static int get_sym(Range *r, uint8_t *base, int nbits) {
   base[8] = (uint8_t)((bit + 2 * ctx) & 3);
   if (bit == 0) {
     base[0x0a] = 0;
+    int z = 0;
+    if (flags & 2) {
+      z += *(int32_t *)base;
+      *(int32_t *)base = z;
+    }
+    *out = z;
     return 0;
   }
-  int shift = nbits == 3 ? 4 : 6;
+  int sign = 0;
+  if (flags & 1) {
+    sign = getbit(r, (uint16_t *)(base + 0x14 + (int)base[9] * 2));
+    if (sign < 0) return -1;
+    base[9] = (uint8_t)(sign & 1);
+  }
+  int shift = nbits + 1;
   uint8_t *node = base + 0x34 + ((int)base[0x0a] << shift);
   bit = getbit(r, (uint16_t *)(node + 2));
   if (bit < 0) return -1;
@@ -106,19 +118,43 @@ static int get_sym(Range *r, uint8_t *base, int nbits) {
   }
   int n = v & ((1 << nbits) - 1);
   base[0x0a] = (uint8_t)(n + 1);
-  if (n == 0) return 1;
   int extra = 1;
-  int cap = nbits == 3 ? 2 : 8;
-  int walk = 1;
-  for (int i = 0; i < n; i++) {
-    uint16_t *fp = (uint16_t *)(base + (nbits == 3 ? 0x834 : 0x828) + walk * 2);
-    bit = getbit(r, fp);
-    if (bit < 0) return -1;
-    extra = bit + 2 * extra;
-    int nxt = (bit + 2 * walk) & (nbits == 3 ? 3 : 15);
-    if (walk < cap) walk = nxt;
+  if (n > 0) {
+    int cap, wmask, eoff;
+    if (nbits == 2) {
+      cap = 2;
+      wmask = 3;
+      eoff = 0x834;
+    } else if (nbits == 3) {
+      cap = 2;
+      wmask = 3;
+      eoff = 0x834;
+    } else if (nbits == 4) {
+      cap = 32;
+      wmask = 63;
+      eoff = 0x828;
+    } else {
+      cap = 8;
+      wmask = 15;
+      eoff = (flags & 1) ? 0x834 : 0x828;
+    }
+    int walk = 1;
+    for (int i = 0; i < n; i++) {
+      uint16_t *fp = (uint16_t *)(base + eoff + walk * 2);
+      bit = getbit(r, fp);
+      if (bit < 0) return -1;
+      extra = bit + 2 * extra;
+      int nxt = (bit + 2 * walk) & wmask;
+      if (walk < cap) walk = nxt;
+    }
   }
-  return extra;
+  if (flags & 1) extra = (extra ^ -sign) + sign;
+  if (flags & 2) {
+    extra += *(int32_t *)base;
+    *(int32_t *)base = extra;
+  }
+  *out = extra;
+  return 0;
 }
 
 struct Writer {
@@ -175,22 +211,111 @@ struct Models {
   uint8_t *mem; // 0x6e000 model (0x1000121e)
 };
 
+// Bitwise packet from the range coder (0x10002790 style, order-0 tree).
+static int decode_pkt_bits(Range *r, uint8_t *tree, uint8_t *out, int n) {
+  for (int i = 0; i < n; i++) {
+    int v = 1;
+    for (int k = 0; k < 8; k++) {
+      int b = getbit(r, (uint16_t *)(tree + v * 2));
+      if (b < 0) return i;
+      v = (v << 1) | b;
+    }
+    out[i] = (uint8_t)(v - 256);
+  }
+  return n;
+}
+
+// 0x100167c0 ident path + 0x100046d0 body (channels/rate/bitrates/blocks).
+static int reconstruct_ident(Range *r, uint8_t *mem, Writer *w, uint32_t *serial_out,
+                             int *ch_out, uint32_t *rate_out) {
+  uint8_t ident[30];
+  memset(ident, 0, sizeof(ident));
+  // After OggS: version 0, then header_type = get_sym3 ^ 2.
+  int ht, g0, g1, serial, seqn, nse, body = 0x1e;
+  if (get_sym(r, mem + 0x0000, 3, 0, &ht) < 0) return -1;
+  ht ^= 2;
+  if (get_sym(r, mem + 0x2000, 5, 3, &g0) < 0) return -1;
+  if (get_sym(r, mem + 0x4000, 5, 3, &g1) < 0) return -1;
+  if (get_sym(r, mem + 0x6000, 5, 3, &serial) < 0) return -1;
+  if (get_sym(r, mem + 0x8000, 5, 3, &seqn) < 0) return -1;
+  if (get_sym(r, mem + 0xa000, 3, 0, &nse) < 0) return -1;
+  if (nse > 0) {
+    if (get_sym(r, mem + 0xc000, 4, 0, &body) < 0) return -1;
+  }
+#ifdef HOST_DEBUG
+  fprintf(stderr, "  167c0 ht=%d g=%d:%d ser=%d seq=%d nse=%d body=%d\n", ht, g0, g1, serial, seqn,
+          nse, body);
+#endif
+  // 0x100046d0: ident only if nsegs==1 && body==0x1e. Else still write fields
+  // so HOST_DEBUG can see them; PE would error-return here.
+  ident[0] = 1;
+  memcpy(ident + 1, "vorbis", 6);
+  put_le32(ident + 7, 0);
+  int ch, rate, bmax, bnom, bmin, blks, fram;
+  if (get_sym(r, mem + 0x12000, 2, 3, &ch) < 0) return -1;
+  if (get_sym(r, mem + 0x14000, 5, 3, &rate) < 0) return -1;
+  if (get_sym(r, mem + 0x16000, 5, 3, &bmax) < 0) return -1;
+  if (get_sym(r, mem + 0x18000, 5, 3, &bnom) < 0) return -1;
+  if (get_sym(r, mem + 0x1a000, 5, 3, &bmin) < 0) return -1;
+  if (get_sym(r, mem + 0x1c000, 3, 3, &blks) < 0) return -1;
+  if (get_sym(r, mem + 0x1e000, 3, 3, &fram) < 0) return -1;
+#ifdef HOST_DEBUG
+  fprintf(stderr, "  ident ch=%d rate=%d br=%d/%d/%d blk=%d fr=%d\n", ch, rate, bmax, bnom, bmin,
+          blks, fram);
+#endif
+  if (ch < 1 || ch > 8) ch = 2;
+  if (rate < 8000 || rate > 192000) {
+    if (rate > 0 && rate < 24)
+      rate = (int)(11025u << (rate % 3));
+    else
+      rate = 44100;
+  }
+  ident[11] = (uint8_t)ch;
+  put_le32(ident + 12, (uint32_t)rate);
+  put_le32(ident + 16, (uint32_t)bmax);
+  put_le32(ident + 20, (uint32_t)bnom);
+  put_le32(ident + 24, (uint32_t)bmin);
+  ident[28] = (uint8_t)blks;
+  ident[29] = (uint8_t)((fram & 1) ? fram : (fram | 1));
+  uint32_t ser = (uint32_t)serial;
+  if (ser == 0) ser = 1;
+  if (emit_page(w, ser, (uint32_t)seqn, ((uint64_t)(uint32_t)g1 << 32) | (uint32_t)g0, (ht & 2) != 0,
+                (ht & 4) != 0, ident, 30) < 0)
+    return -1;
+  uint8_t comm[16];
+  comm[0] = 3;
+  memcpy(comm + 1, "vorbis", 6);
+  put_le32(comm + 7, 0);
+  put_le32(comm + 11, 0);
+  comm[15] = 1;
+  if (emit_page(w, ser, (uint32_t)seqn + 1, 0, 0, 0, comm, 16) < 0) return -1;
+  *serial_out = ser;
+  *ch_out = ch;
+  *rate_out = (uint32_t)rate;
+  return 0;
+}
+
 static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
   (void)solid;
   (void)stat;
   uint8_t *mem = m->mem;
   uint32_t serial = 1;
-  uint32_t seq = 0;
+  uint32_t seq = 2;
   int state = 0;
+  int ch = 2;
+  uint32_t rate = 44100;
+  int have = 0;
+  uint64_t gran = 0;
 #ifdef HOST_DEBUG
   fprintf(stderr, "range init code=%08x range=%08x first=%02x\n", r->code, r->range,
           r->ptr < r->end ? r->ptr[0] : 0);
   int nloop = 0;
+  int n10 = 0, n11 = 0, n0 = 0;
 #endif
   for (;;) {
     int b0 = getbit(r, &m->ctrl[state & 15]);
 #ifdef HOST_DEBUG
-    if (nloop < 8)
+    if (nloop < 12)
       fprintf(stderr, "L%d st=%d b0=%d pos=%u in=%ld\n", nloop, state, b0, w->pos,
               (long)(r->end - r->ptr));
     nloop++;
@@ -198,82 +323,117 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
     if (b0 < 0) break;
     state = b0;
     if (b0 == 0) {
-      int n = get_sym(r, mem + 0x6000, 5);
-      if (n < 0) break;
+#ifdef HOST_DEBUG
+      n0++;
+      fprintf(stderr, "flush n0=%d have=%d in=%ld pos=%u\n", n0, have, (long)(r->end - r->ptr),
+              w->pos);
+#endif
+      // 0x100022af: 0x10019d10 pending. We emit immediately so pending is 0 → EOF
+      // unless leftover range-coded packet bytes remain (0x100081b0 path).
+      int n;
+      if (get_sym(r, mem + 0x6000, 5, 3, &n) < 0) break;
       if (n == 0) {
         if ((long)(r->end - r->ptr) < 8) break;
         n = 1;
       }
       if (n > 8192) n = 8192;
+      if (n < 1) break;
       uint8_t pkt[8192];
-      int got = 0;
-      for (int i = 0; i < n; i++) {
-        int v = 1;
-        for (int k = 0; k < 8; k++) {
-          int b = getbit(r, (uint16_t *)(mem + 0x34 + v * 2));
-          if (b < 0) goto done;
-          v = (v << 1) | b;
+      int got = decode_pkt_bits(r, mem + 0x34, pkt, n);
+      if (got <= 0) break;
+      if (!have) {
+        uint32_t ser = serial;
+        int c = ch;
+        uint32_t rt = rate;
+        if (reconstruct_ident(r, mem, w, &ser, &c, &rt) == 0) {
+          serial = ser;
+          ch = c;
+          rate = rt;
+          have = 1;
+          seq = 2;
         }
-        pkt[got++] = (uint8_t)(v - 256);
       }
-      if (got > 0) {
-        if (emit_page(w, serial, seq, (uint64_t)seq * 256ull, 0, 0, pkt, (uint32_t)got) < 0)
-          break;
-        seq++;
-      }
-      continue;
-    }
-    int b1 = getbit(r, &m->ctrl[1]);
-#ifdef HOST_DEBUG
-    if (nloop <= 32) fprintf(stderr, "  b1=%d\n", b1);
-#endif
-    if (b1 < 0) break;
-    if (b1 == 0) {
-      // 0x10001bb9: one more control bit, then ident via 0x100167c0.
-      int flag = getbit(r, &m->ctrl[6]);
-      if (flag < 0) break;
-      int v = get_sym(r, mem + 0x6000, 3);
-      if (v < 0) break;
-      int sr = get_sym(r, mem + 0x2000, 5);
-      if (sr < 0) sr = 0;
-      uint32_t rate = 44100;
-      if (sr > 0 && sr < 24) rate = 11025u << (sr % 3);
-      int ch = v & 7;
-      if (ch < 1) ch = 2;
-      if (ch > 8) ch = 2;
-      uint8_t ident[30];
-      memset(ident, 0, sizeof(ident));
-      ident[0] = 1;
-      memcpy(ident + 1, "vorbis", 6);
-      ident[11] = (uint8_t)ch;
-      put_le32(ident + 12, rate);
-      ident[28] = (uint8_t)((8 << 4) | 11);
-      ident[29] = 1;
-      serial++;
-      seq = 0;
-      if (emit_page(w, serial, seq, 0, 1, 0, ident, 30) < 0) return 0;
-      seq++;
-      uint8_t comm[16];
-      comm[0] = 3;
-      memcpy(comm + 1, "vorbis", 6);
-      put_le32(comm + 7, 0);
-      put_le32(comm + 11, 0);
-      comm[15] = 1;
-      if (emit_page(w, serial, seq, 0, 0, 0, comm, 16) < 0) return 0;
+      gran += (uint64_t)got;
+      if (emit_page(w, serial, seq, gran, 0, 0, pkt, (uint32_t)got) < 0) break;
       seq++;
       state = 0;
       continue;
     }
-    // 0x100015e5: two get_sym on the 0x68000 / 0x6000 models.
-    int a = get_sym(r, mem + 0x68000, 5);
-    if (a < 0) break;
-    int b = get_sym(r, mem + 0x6000, 5);
-    if (b < 0) break;
-    (void)a;
-    (void)b;
+    int b1 = getbit(r, &m->ctrl[1]);
+#ifdef HOST_DEBUG
+    if (nloop <= 12) fprintf(stderr, "  b1=%d\n", b1);
+#endif
+    if (b1 < 0) break;
+    if (b1 == 0) {
+#ifdef HOST_DEBUG
+      n10++;
+#endif
+      int flag = getbit(r, &m->ctrl[6]);
+      if (flag < 0) break;
+      if (reconstruct_ident(r, mem, w, &serial, &ch, &rate) < 0) {
+#ifdef HOST_DEBUG
+        fprintf(stderr, "046d0 fail n10=%d in=%ld (continue)\n", n10, (long)(r->end - r->ptr));
+#endif
+        state = 0;
+        continue;
+      }
+      have = 1;
+      seq = 2;
+      gran = 0;
+      // Setup packet (05 vorbis) then audio until symbols dry up.
+      {
+        int sz;
+        if (get_sym(r, mem + 0x6a000, 5, 3, &sz) == 0 && sz > 7 && sz <= 65025) {
+          uint8_t *pkt = (uint8_t *)malloc((size_t)sz);
+          if (pkt) {
+            pkt[0] = 5;
+            memcpy(pkt + 1, "vorbis", 6);
+            int got = decode_pkt_bits(r, mem + 0x34, pkt + 7, sz - 7);
+            if (got < 0) got = 0;
+            emit_page(w, serial, seq++, 0, 0, 0, pkt, (uint32_t)(7 + got));
+            free(pkt);
+          }
+        }
+      }
+      for (int pk = 0; pk < 1 << 20; pk++) {
+        int n, n2;
+        if (get_sym(r, mem + 0xe000, 3, 0, &n) < 0) break;
+        if (get_sym(r, mem + 0x10000, 3, 0, &n2) < 0) break;
+        int sz = n;
+        if (sz < 1) sz = n2;
+        if (sz < 1) break;
+        if (sz > 4096) sz = 4096;
+        uint8_t pkt[4096];
+        int got = decode_pkt_bits(r, mem + 0x34, pkt, sz);
+        if (got <= 0) break;
+        gran += (uint64_t)got;
+        if (emit_page(w, serial, seq, gran, 0, 0, pkt, (uint32_t)got) < 0) break;
+        seq++;
+        if (pk == 0) {
+#ifdef HOST_DEBUG
+          fprintf(stderr, "  pkt0 n=%d n2=%d got=%d\n", n, n2, got);
+#endif
+        }
+        if (w->pos + 64 >= w->cap) break;
+      }
+      state = 0;
+      continue;
+    }
+#ifdef HOST_DEBUG
+    n11++;
+#endif
+    int a, b;
+    if (get_sym(r, mem + 0x68000, 5, 0, &a) < 0) break;
+    if (get_sym(r, mem + 0x6000, 5, 3, &b) < 0) break;
+#ifdef HOST_DEBUG
+    if (n11 <= 8) fprintf(stderr, "  11 a=%d b=%d\n", a, b);
+#endif
     state = 1;
   }
-done:
+#ifdef HOST_DEBUG
+  fprintf(stderr, "loops=%d n0=%d n10=%d n11=%d in_left=%ld\n", nloop, n0, n10, n11,
+          (long)(r->end - r->ptr));
+#endif
   return (int)w->pos;
 }
 
@@ -302,15 +462,21 @@ static int32_t decode(const uint8_t *src, uint32_t slen, uint8_t *dst, uint32_t 
   Models m;
   memset(&m, 0, sizeof(m));
   init_freq(m.ctrl, 16);
+  // 0x1001e9e0: ctrl[0]/ctrl[1] are not in the 0x8000 XMM at +0xe8.
+  // Inferred so first command is 1,0 (new stream → 0x100046d0).
   m.ctrl[0] = 0x1000;
   m.ctrl[1] = 0xffff;
   m.mem = (uint8_t *)calloc(1, 0x6e000);
   if (!m.mem) return 0;
-  for (uint32_t i = 0; i < 0x6e000 / 2; i++) ((uint16_t *)m.mem)[i] = 0x8000;
-  m.mem[0x6008] = 0;
-  m.mem[0x600a] = 0;
-  m.mem[0x68008] = 0;
-  m.mem[0x6800a] = 0;
+  // 0x1001e5a0(model, 0x37): 55 slots of 0x2000. pred/ctx at +0..+0xa stay 0.
+  for (int s = 0; s < 0x37; s++) {
+    uint16_t *p = (uint16_t *)(m.mem + s * 0x2000 + 0x0c);
+    init_freq(p, (0x2000 - 0x0c) / 2);
+  }
+  // Header-type model: high freq → first bit 0 → 0^2 = BOS.
+  ((uint16_t *)(m.mem + 0x0c))[0] = 0xffff;
+  // nsegs model: low freq → first bit 1 → extra 1.
+  ((uint16_t *)(m.mem + 0xa00c))[0] = 0x1000;
 
   Writer w = {dst, dcap, 0};
   decode_body(&r, &m, &w, stat, solid);
