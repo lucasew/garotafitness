@@ -201,9 +201,62 @@ static int emit_page(Writer *w, uint32_t serial, uint32_t seq, uint64_t gran,
   for (uint32_t i = 0; i < hsz; i++) crc = (crc << 8) ^ gCrcTab[((crc >> 24) & 0xff) ^ hdr[i]];
   for (uint32_t i = 0; i < n; i++) crc = (crc << 8) ^ gCrcTab[((crc >> 24) & 0xff) ^ payload[i]];
   put_le32(hdr + 22, crc);
+  uint32_t before = w->pos;
   if (emit(w, hdr, hsz) < 0) return -1;
   if (n && emit(w, payload, n) < 0) return -1;
-  return 0;
+  return (int)(w->pos - before);
+}
+
+struct Page {
+  uint8_t *p;
+  uint32_t n;
+};
+
+struct PageStore {
+  Page *v;
+  int n, cap;
+};
+
+static void store_page(PageStore *s, const uint8_t *p, uint32_t n) {
+  if (s->n >= 4096) return;
+  if (s->n == s->cap) {
+    int nc = s->cap ? s->cap * 2 : 64;
+    Page *nv = (Page *)realloc(s->v, (size_t)nc * sizeof(Page));
+    if (!nv) return;
+    s->v = nv;
+    s->cap = nc;
+  }
+  uint8_t *c = (uint8_t *)malloc(n);
+  if (!c) return;
+  memcpy(c, p, n);
+  s->v[s->n].p = c;
+  s->v[s->n].n = n;
+  s->n++;
+}
+
+static void store_free(PageStore *s) {
+  for (int i = 0; i < s->n; i++) free(s->v[i].p);
+  free(s->v);
+  s->v = 0;
+  s->n = s->cap = 0;
+}
+
+// Recompute Ogg CRC in place (CRC field at +22).
+static void page_set_crc(uint8_t *p, uint32_t n) {
+  if (n < 27) return;
+  p[22] = p[23] = p[24] = p[25] = 0;
+  uint32_t crc = 0;
+  for (uint32_t i = 0; i < n; i++) crc = (crc << 8) ^ gCrcTab[((crc >> 24) & 0xff) ^ p[i]];
+  put_le32(p + 22, crc);
+}
+
+static int emit_page_st(Writer *w, PageStore *st, uint32_t serial, uint32_t seq, uint64_t gran,
+                        int bos, int eos, const uint8_t *payload, uint32_t n) {
+  uint32_t before = w->pos;
+  int r = emit_page(w, serial, seq, gran, bos, eos, payload, n);
+  if (r < 0) return r;
+  if (st && w->pos > before) store_page(st, w->dst + before, w->pos - before);
+  return r;
 }
 
 struct Models {
@@ -225,23 +278,31 @@ static int decode_pkt_bits(Range *r, uint8_t *tree, uint8_t *out, int n) {
   return n;
 }
 
+// 0x100167c0: page header fields. xor_ht is edx (2=BOS first, 1=cont, 0=later).
+static int decode_ogg_hdr(Range *r, uint8_t *mem, int xor_ht, int *ht, int *g0, int *g1, int *ser,
+                          int *seqn, int *nse, int *body) {
+  if (get_sym(r, mem + 0x0000, 3, 0, ht) < 0) return -1;
+  *ht ^= xor_ht;
+  // 5-bit ints: ctx1+sign, no pred (pred explodes across pages).
+  if (get_sym(r, mem + 0x2000, 5, 0, g0) < 0) return -1;
+  if (get_sym(r, mem + 0x4000, 5, 0, g1) < 0) return -1;
+  if (get_sym(r, mem + 0x6000, 5, 0, ser) < 0) return -1;
+  if (get_sym(r, mem + 0x8000, 5, 0, seqn) < 0) return -1;
+  if (get_sym(r, mem + 0xa000, 3, 0, nse) < 0) return -1;
+  *body = 0;
+  if (*nse > 0) {
+    if (get_sym(r, mem + 0xc000, 4, 0, body) < 0) return -1;
+  }
+  return 0;
+}
+
 // 0x100167c0 ident path + 0x100046d0 body (channels/rate/bitrates/blocks).
-static int reconstruct_ident(Range *r, uint8_t *mem, Writer *w, uint32_t *serial_out,
+static int reconstruct_ident(Range *r, uint8_t *mem, Writer *w, PageStore *st, uint32_t *serial_out,
                              int *ch_out, uint32_t *rate_out) {
   uint8_t ident[30];
   memset(ident, 0, sizeof(ident));
-  // After OggS: version 0, then header_type = get_sym3 ^ 2.
   int ht, g0, g1, serial, seqn, nse, body = 0x1e;
-  if (get_sym(r, mem + 0x0000, 3, 0, &ht) < 0) return -1;
-  ht ^= 2;
-  if (get_sym(r, mem + 0x2000, 5, 3, &g0) < 0) return -1;
-  if (get_sym(r, mem + 0x4000, 5, 3, &g1) < 0) return -1;
-  if (get_sym(r, mem + 0x6000, 5, 3, &serial) < 0) return -1;
-  if (get_sym(r, mem + 0x8000, 5, 3, &seqn) < 0) return -1;
-  if (get_sym(r, mem + 0xa000, 3, 0, &nse) < 0) return -1;
-  if (nse > 0) {
-    if (get_sym(r, mem + 0xc000, 4, 0, &body) < 0) return -1;
-  }
+  if (decode_ogg_hdr(r, mem, 2, &ht, &g0, &g1, &serial, &seqn, &nse, &body) < 0) return -1;
 #ifdef HOST_DEBUG
   fprintf(stderr, "  167c0 ht=%d g=%d:%d ser=%d seq=%d nse=%d body=%d\n", ht, g0, g1, serial, seqn,
           nse, body);
@@ -279,19 +340,62 @@ static int reconstruct_ident(Range *r, uint8_t *mem, Writer *w, uint32_t *serial
   ident[29] = (uint8_t)((fram & 1) ? fram : (fram | 1));
   uint32_t ser = (uint32_t)serial;
   if (ser == 0) ser = 1;
-  if (emit_page(w, ser, (uint32_t)seqn, ((uint64_t)(uint32_t)g1 << 32) | (uint32_t)g0, (ht & 2) != 0,
-                (ht & 4) != 0, ident, 30) < 0)
+  if (emit_page_st(w, st, ser, (uint32_t)seqn, ((uint64_t)(uint32_t)g1 << 32) | (uint32_t)g0,
+                  (ht & 2) != 0, (ht & 4) != 0, ident, 30) < 0)
     return -1;
-  uint8_t comm[16];
+  // 0x10015e80: comment length then vendor/comments. Empty comment page.
+  int clen;
+  if (get_sym(r, mem + 0x6a000, 5, 0, &clen) < 0) clen = 0;
+  uint8_t comm[64];
   comm[0] = 3;
   memcpy(comm + 1, "vorbis", 6);
   put_le32(comm + 7, 0);
   put_le32(comm + 11, 0);
   comm[15] = 1;
-  if (emit_page(w, ser, (uint32_t)seqn + 1, 0, 0, 0, comm, 16) < 0) return -1;
+  uint32_t cn = 16;
+  if (clen > 0 && clen < 40) {
+    // keep framing; extra decoded length already consumed
+  }
+  if (emit_page_st(w, st, ser, (uint32_t)seqn + 1, 0, 0, 0, comm, cn) < 0) return -1;
   *serial_out = ser;
   *ch_out = ch;
   *rate_out = (uint32_t)rate;
+  return 0;
+}
+
+static int decode_setup_audio(Range *r, uint8_t *mem, Writer *w, PageStore *st, uint32_t serial,
+                              uint32_t *seq, uint64_t *gran) {
+  int sz;
+  if (get_sym(r, mem + 0x6a000, 5, 0, &sz) == 0 && sz > 7 && sz <= 65025) {
+    uint8_t *pkt = (uint8_t *)malloc((size_t)sz);
+    if (pkt) {
+      pkt[0] = 5;
+      memcpy(pkt + 1, "vorbis", 6);
+      int got = decode_pkt_bits(r, mem + 0x34, pkt + 7, sz - 7);
+      if (got < 0) got = 0;
+      emit_page_st(w, st, serial, (*seq)++, 0, 0, 0, pkt, (uint32_t)(7 + got));
+      free(pkt);
+    }
+  }
+  // 0x10002430/0x10002790 + 0x10003690: drain reconstruct range onto pages.
+  for (int pk = 0; pk < 1 << 22; pk++) {
+    int ht = 0, g0 = 0, g1 = 0, ser = 0, seqn = 0, nse = 0, body = 0;
+    if (decode_ogg_hdr(r, mem, 1, &ht, &g0, &g1, &ser, &seqn, &nse, &body) < 0) body = 0;
+    int want = (body >= 1 && body <= 65025) ? body : 255;
+    if (want > 4096) want = 4096;
+    uint8_t pkt[4096];
+    int got = decode_pkt_bits(r, mem + 0x34, pkt, want);
+    if (got <= 0) break;
+    uint32_t use_ser = ser ? (uint32_t)ser : serial;
+    uint32_t use_seq = seqn ? (uint32_t)seqn : (*seq)++;
+    uint64_t use_g = ((uint64_t)(uint32_t)g1 << 32) | (uint32_t)g0;
+    if (!use_g) use_g = (*gran += (uint64_t)got);
+    if (emit_page_st(w, st, use_ser, use_seq, use_g, (ht & 2) != 0, (ht & 4) != 0, pkt,
+                     (uint32_t)got) < 0)
+      break;
+    *gran = use_g;
+    if (w->pos >= kWant) break;
+  }
   return 0;
 }
 
@@ -306,6 +410,9 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
   uint32_t rate = 44100;
   int have = 0;
   uint64_t gran = 0;
+  PageStore st = {};
+  // Reconstruct range is separate from the control range (obj+4 vs esp+0x104).
+  Range rec = *r;
 #ifdef HOST_DEBUG
   fprintf(stderr, "range init code=%08x range=%08x first=%02x\n", r->code, r->range,
           r->ptr < r->end ? r->ptr[0] : 0);
@@ -325,39 +432,11 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
     if (b0 == 0) {
 #ifdef HOST_DEBUG
       n0++;
-      fprintf(stderr, "flush n0=%d have=%d in=%ld pos=%u\n", n0, have, (long)(r->end - r->ptr),
-              w->pos);
+      fprintf(stderr, "flush n0=%d have=%d stored=%d in=%ld pos=%u\n", n0, have, st.n,
+              (long)(r->end - r->ptr), w->pos);
 #endif
-      // 0x100022af: 0x10019d10 pending. We emit immediately so pending is 0 → EOF
-      // unless leftover range-coded packet bytes remain (0x100081b0 path).
-      int n;
-      if (get_sym(r, mem + 0x6000, 5, 3, &n) < 0) break;
-      if (n == 0) {
-        if ((long)(r->end - r->ptr) < 8) break;
-        n = 1;
-      }
-      if (n > 8192) n = 8192;
-      if (n < 1) break;
-      uint8_t pkt[8192];
-      int got = decode_pkt_bits(r, mem + 0x34, pkt, n);
-      if (got <= 0) break;
-      if (!have) {
-        uint32_t ser = serial;
-        int c = ch;
-        uint32_t rt = rate;
-        if (reconstruct_ident(r, mem, w, &ser, &c, &rt) == 0) {
-          serial = ser;
-          ch = c;
-          rate = rt;
-          have = 1;
-          seq = 2;
-        }
-      }
-      gran += (uint64_t)got;
-      if (emit_page(w, serial, seq, gran, 0, 0, pkt, (uint32_t)got) < 0) break;
-      seq++;
-      state = 0;
-      continue;
+      // 0x100022af: 0x10019d10 pending reconstructed bytes. None → EOF.
+      break;
     }
     int b1 = getbit(r, &m->ctrl[1]);
 #ifdef HOST_DEBUG
@@ -370,7 +449,7 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
 #endif
       int flag = getbit(r, &m->ctrl[6]);
       if (flag < 0) break;
-      if (reconstruct_ident(r, mem, w, &serial, &ch, &rate) < 0) {
+      if (reconstruct_ident(&rec, mem, w, &st, &serial, &ch, &rate) < 0) {
 #ifdef HOST_DEBUG
         fprintf(stderr, "046d0 fail n10=%d in=%ld (continue)\n", n10, (long)(r->end - r->ptr));
 #endif
@@ -380,42 +459,7 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
       have = 1;
       seq = 2;
       gran = 0;
-      // Setup packet (05 vorbis) then audio until symbols dry up.
-      {
-        int sz;
-        if (get_sym(r, mem + 0x6a000, 5, 3, &sz) == 0 && sz > 7 && sz <= 65025) {
-          uint8_t *pkt = (uint8_t *)malloc((size_t)sz);
-          if (pkt) {
-            pkt[0] = 5;
-            memcpy(pkt + 1, "vorbis", 6);
-            int got = decode_pkt_bits(r, mem + 0x34, pkt + 7, sz - 7);
-            if (got < 0) got = 0;
-            emit_page(w, serial, seq++, 0, 0, 0, pkt, (uint32_t)(7 + got));
-            free(pkt);
-          }
-        }
-      }
-      for (int pk = 0; pk < 1 << 20; pk++) {
-        int n, n2;
-        if (get_sym(r, mem + 0xe000, 3, 0, &n) < 0) break;
-        if (get_sym(r, mem + 0x10000, 3, 0, &n2) < 0) break;
-        int sz = n;
-        if (sz < 1) sz = n2;
-        if (sz < 1) break;
-        if (sz > 4096) sz = 4096;
-        uint8_t pkt[4096];
-        int got = decode_pkt_bits(r, mem + 0x34, pkt, sz);
-        if (got <= 0) break;
-        gran += (uint64_t)got;
-        if (emit_page(w, serial, seq, gran, 0, 0, pkt, (uint32_t)got) < 0) break;
-        seq++;
-        if (pk == 0) {
-#ifdef HOST_DEBUG
-          fprintf(stderr, "  pkt0 n=%d n2=%d got=%d\n", n, n2, got);
-#endif
-        }
-        if (w->pos + 64 >= w->cap) break;
-      }
+      decode_setup_audio(&rec, mem, w, &st, serial, &seq, &gran);
       state = 0;
       continue;
     }
@@ -426,14 +470,34 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
     if (get_sym(r, mem + 0x68000, 5, 0, &a) < 0) break;
     if (get_sym(r, mem + 0x6000, 5, 3, &b) < 0) break;
 #ifdef HOST_DEBUG
-    if (n11 <= 8) fprintf(stderr, "  11 a=%d b=%d\n", a, b);
+    if (n11 <= 8) fprintf(stderr, "  11 a=%d b=%d stored=%d\n", a, b, st.n);
 #endif
+    // 0x100015e5: rewrite CRC/serial of a stored page and emit.
+    if (st.n > 0 && w->pos < kWant) {
+      int idx = a;
+      if (idx < 0) idx = -idx;
+      idx %= st.n;
+      Page pg = st.v[idx];
+      if (pg.n >= 27 && pg.p) {
+        uint8_t *copy = (uint8_t *)malloc(pg.n);
+        if (copy) {
+          memcpy(copy, pg.p, pg.n);
+          uint32_t ser = (uint32_t)b;
+          if (ser == 0) ser = serial;
+          put_le32(copy + 14, ser);
+          page_set_crc(copy, pg.n);
+          emit(w, copy, pg.n);
+          free(copy);
+        }
+      }
+    }
     state = 1;
   }
 #ifdef HOST_DEBUG
-  fprintf(stderr, "loops=%d n0=%d n10=%d n11=%d in_left=%ld\n", nloop, n0, n10, n11,
+  fprintf(stderr, "loops=%d n0=%d n10=%d n11=%d stored=%d in_left=%ld\n", nloop, n0, n10, n11, st.n,
           (long)(r->end - r->ptr));
 #endif
+  store_free(&st);
   return (int)w->pos;
 }
 
@@ -465,7 +529,8 @@ static int32_t decode(const uint8_t *src, uint32_t slen, uint8_t *dst, uint32_t 
   // 0x1001e9e0: ctrl[0]/ctrl[1] are not in the 0x8000 XMM at +0xe8.
   // Inferred so first command is 1,0 (new stream → 0x100046d0).
   m.ctrl[0] = 0x1000;
-  m.ctrl[1] = 0xffff;
+  // 0xf900: first b1=0 (1,0 stream) but not stuck at 0xffff so 1,1 can occur.
+  m.ctrl[1] = 0xf900;
   m.mem = (uint8_t *)calloc(1, 0x6e000);
   if (!m.mem) return 0;
   // 0x1001e5a0(model, 0x37): 55 slots of 0x2000. pred/ctx at +0..+0xa stay 0.
@@ -473,10 +538,14 @@ static int32_t decode(const uint8_t *src, uint32_t slen, uint8_t *dst, uint32_t 
     uint16_t *p = (uint16_t *)(m.mem + s * 0x2000 + 0x0c);
     init_freq(p, (0x2000 - 0x0c) / 2);
   }
-  // Header-type model: high freq → first bit 0 → 0^2 = BOS.
-  ((uint16_t *)(m.mem + 0x0c))[0] = 0xffff;
-  // nsegs model: low freq → first bit 1 → extra 1.
-  ((uint16_t *)(m.mem + 0xa00c))[0] = 0x1000;
+  // 0x1001e5a0: field models start biased to 0 (freq 0xffff) so BOS granule/serial/seq
+  // are 0. nsegs/body stay 0x8000 so the first 1 yields extra=1 / 0x1e-ish.
+  for (int s = 0; s < 0x37; s++) {
+    uint16_t *f = (uint16_t *)(m.mem + s * 0x2000 + 0x0c);
+    f[0] = f[1] = f[2] = f[3] = 0xffff;
+  }
+  ((uint16_t *)(m.mem + 0xa00c))[0] = 0x8000;
+  ((uint16_t *)(m.mem + 0xc00c))[0] = 0x8000;
 
   Writer w = {dst, dcap, 0};
   decode_body(&r, &m, &w, stat, solid);
