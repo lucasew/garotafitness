@@ -120,32 +120,51 @@ static int get_sym(Range *r, uint8_t *base, int nbits, int flags, int *out) {
   base[0x0a] = (uint8_t)(n + 1);
   int extra = 1;
   if (n > 0) {
-    int cap, wmask, eoff;
-    if (nbits == 2) {
-      cap = 2;
-      wmask = 3;
-      eoff = 0x834;
-    } else if (nbits == 3) {
-      cap = 2;
-      wmask = 3;
-      eoff = 0x834;
-    } else if (nbits == 4) {
-      cap = 32;
-      wmask = 63;
-      eoff = 0x828;
-    } else {
-      cap = 8;
-      wmask = 15;
-      eoff = (flags & 1) ? 0x834 : 0x828;
-    }
-    int walk = 1;
-    for (int i = 0; i < n; i++) {
-      uint16_t *fp = (uint16_t *)(base + eoff + walk * 2);
-      bit = getbit(r, fp);
+    if (flags & 4) {
+      // 0x100167c0 +0xa000 / 0x100150a0 extra: node 0x834+(n<<5), mask 0xf.
+      uint8_t *node = base + 0x834 + (n << 5);
+      bit = getbit(r, (uint16_t *)(node + 2));
       if (bit < 0) return -1;
-      extra = bit + 2 * extra;
-      int nxt = (bit + 2 * walk) & wmask;
-      if (walk < cap) walk = nxt;
+      extra = bit + 2;
+      int left = n - 1;
+      int acc = 2;
+      while (left-- > 0) {
+        acc += bit;
+        int si = acc & 0xf;
+        bit = getbit(r, (uint16_t *)(node + si * 2));
+        if (bit < 0) return -1;
+        extra = bit + 2 * extra;
+        if (si < 8) acc = 2;
+      }
+    } else {
+      int cap, wmask, eoff;
+      if (nbits == 2) {
+        cap = 2;
+        wmask = 3;
+        eoff = 0x834;
+      } else if (nbits == 3) {
+        cap = 2;
+        wmask = 3;
+        eoff = 0x834;
+      } else if (nbits == 4) {
+        // 0x100167c0 +0xc000: extra at 0x834+(n<<7).
+        cap = 32;
+        wmask = 63;
+        eoff = 0x834 + (n << 7);
+      } else {
+        cap = 8;
+        wmask = 15;
+        eoff = (flags & 1) ? 0x834 : 0x828;
+      }
+      int walk = 1;
+      for (int i = 0; i < n; i++) {
+        uint16_t *fp = (uint16_t *)(base + eoff + walk * 2);
+        bit = getbit(r, fp);
+        if (bit < 0) return -1;
+        extra = bit + 2 * extra;
+        int nxt = (bit + 2 * walk) & wmask;
+        if (walk < cap) walk = nxt;
+      }
     }
   }
   if (flags & 1) extra = (extra ^ -sign) + sign;
@@ -264,17 +283,23 @@ struct Models {
   uint8_t *mem; // 0x6e000 model (0x1000121e)
 };
 
-// Bitwise packet from the range coder (0x10002790 style, order-0 tree).
-static int decode_pkt_bits(Range *r, uint8_t *tree, uint8_t *out, int n) {
+// 0x10002790: LSB-first bits, 2-bit ctx (obj+0x6fb style) at freq[4].
+static int decode_pkt_lsb(Range *r, uint16_t *freq4, uint8_t *ctx, uint8_t *out, int n) {
+  int c = *ctx & 3;
   for (int i = 0; i < n; i++) {
-    int v = 1;
+    uint8_t acc = 0;
     for (int k = 0; k < 8; k++) {
-      int b = getbit(r, (uint16_t *)(tree + v * 2));
-      if (b < 0) return i;
-      v = (v << 1) | b;
+      int b = getbit(r, &freq4[c]);
+      if (b < 0) {
+        *ctx = (uint8_t)c;
+        return i;
+      }
+      acc |= (uint8_t)(b << k);
+      c = (b + 2 * c) & 3;
     }
-    out[i] = (uint8_t)(v - 256);
+    out[i] = acc;
   }
+  *ctx = (uint8_t)c;
   return n;
 }
 
@@ -288,10 +313,23 @@ static int decode_ogg_hdr(Range *r, uint8_t *mem, int xor_ht, int *ht, int *g0, 
   if (get_sym(r, mem + 0x4000, 5, 0, g1) < 0) return -1;
   if (get_sym(r, mem + 0x6000, 5, 0, ser) < 0) return -1;
   if (get_sym(r, mem + 0x8000, 5, 0, seqn) < 0) return -1;
-  if (get_sym(r, mem + 0xa000, 3, 0, nse) < 0) return -1;
+  if (get_sym(r, mem + 0xa000, 3, 4, nse) < 0) return -1;
   *body = 0;
-  if (*nse > 0) {
-    if (get_sym(r, mem + 0xc000, 4, 0, body) < 0) return -1;
+  int ns = *nse;
+  if (ns < 0) ns = 0;
+  if (ns > 255) ns = 255;
+  *nse = ns;
+  if (ns == 1 && xor_ht == 2) {
+    // First BOS page: PE checks 0x3b4==0x1e.
+    *body = 0x1e;
+    return 0;
+  }
+  for (int i = 0; i < ns; i++) {
+    int sl;
+    if (get_sym(r, mem + 0xc000, 4, 0, &sl) < 0) return -1;
+    if (sl < 0) sl = 0;
+    if (sl > 255) sl = 255;
+    *body += sl;
   }
   return 0;
 }
@@ -307,19 +345,20 @@ static int reconstruct_ident(Range *r, uint8_t *mem, Writer *w, PageStore *st, u
   fprintf(stderr, "  167c0 ht=%d g=%d:%d ser=%d seq=%d nse=%d body=%d\n", ht, g0, g1, serial, seqn,
           nse, body);
 #endif
-  // 0x100046d0: ident only if nsegs==1 && body==0x1e. Else still write fields
-  // so HOST_DEBUG can see them; PE would error-return here.
   ident[0] = 1;
   memcpy(ident + 1, "vorbis", 6);
   put_le32(ident + 7, 0);
-  int ch, rate, bmax, bnom, bmin, blks, fram;
-  if (get_sym(r, mem + 0x12000, 2, 3, &ch) < 0) return -1;
-  if (get_sym(r, mem + 0x14000, 5, 3, &rate) < 0) return -1;
-  if (get_sym(r, mem + 0x16000, 5, 3, &bmax) < 0) return -1;
-  if (get_sym(r, mem + 0x18000, 5, 3, &bnom) < 0) return -1;
-  if (get_sym(r, mem + 0x1a000, 5, 3, &bmin) < 0) return -1;
-  if (get_sym(r, mem + 0x1c000, 3, 3, &blks) < 0) return -1;
-  if (get_sym(r, mem + 0x1e000, 3, 3, &fram) < 0) return -1;
+  int ch = 2, rate = 44100, bmax = 0, bnom = 0, bmin = 0, blks = (8 << 4) | 11, fram = 1;
+  // 0x100046d0: ident fields only if nsegs==1 && body==0x1e.
+  if (nse == 1 && body == 0x1e) {
+    if (get_sym(r, mem + 0x12000, 2, 3, &ch) < 0) return -1;
+    if (get_sym(r, mem + 0x14000, 5, 3, &rate) < 0) return -1;
+    if (get_sym(r, mem + 0x16000, 5, 3, &bmax) < 0) return -1;
+    if (get_sym(r, mem + 0x18000, 5, 3, &bnom) < 0) return -1;
+    if (get_sym(r, mem + 0x1a000, 5, 3, &bmin) < 0) return -1;
+    if (get_sym(r, mem + 0x1c000, 3, 3, &blks) < 0) return -1;
+    if (get_sym(r, mem + 0x1e000, 3, 3, &fram) < 0) return -1;
+  }
 #ifdef HOST_DEBUG
   fprintf(stderr, "  ident ch=%d rate=%d br=%d/%d/%d blk=%d fr=%d\n", ch, rate, bmax, bnom, bmin,
           blks, fram);
@@ -365,34 +404,49 @@ static int reconstruct_ident(Range *r, uint8_t *mem, Writer *w, PageStore *st, u
 
 static int decode_setup_audio(Range *r, uint8_t *mem, Writer *w, PageStore *st, uint32_t serial,
                               uint32_t *seq, uint64_t *gran) {
+  uint16_t *pf = (uint16_t *)(mem + 0x6d000);
+  uint8_t ctx = 0;
   int sz;
   if (get_sym(r, mem + 0x6a000, 5, 0, &sz) == 0 && sz > 7 && sz <= 65025) {
     uint8_t *pkt = (uint8_t *)malloc((size_t)sz);
     if (pkt) {
       pkt[0] = 5;
       memcpy(pkt + 1, "vorbis", 6);
-      int got = decode_pkt_bits(r, mem + 0x34, pkt + 7, sz - 7);
+      int got = decode_pkt_lsb(r, pf, &ctx, pkt + 7, sz - 7);
       if (got < 0) got = 0;
       emit_page_st(w, st, serial, (*seq)++, 0, 0, 0, pkt, (uint32_t)(7 + got));
       free(pkt);
     }
   }
-  // 0x10002430/0x10002790 + 0x10003690: drain reconstruct range onto pages.
+  // 0x10002430/0x10002790 + 0x10003690: one 167c0 page at a time, fill body bits.
   for (int pk = 0; pk < 1 << 22; pk++) {
     int ht = 0, g0 = 0, g1 = 0, ser = 0, seqn = 0, nse = 0, body = 0;
     if (decode_ogg_hdr(r, mem, 1, &ht, &g0, &g1, &ser, &seqn, &nse, &body) < 0) body = 0;
-    int want = (body >= 1 && body <= 65025) ? body : 255;
-    if (want > 4096) want = 4096;
-    uint8_t pkt[4096];
-    int got = decode_pkt_bits(r, mem + 0x34, pkt, want);
-    if (got <= 0) break;
+    if (body < 1 || body > 65025) body = 255;
+    uint8_t *pkt = (uint8_t *)malloc((size_t)body);
+    if (!pkt) break;
+    int got = decode_pkt_lsb(r, pf, &ctx, pkt, body);
+    if (got <= 0) {
+      free(pkt);
+      break;
+    }
     uint32_t use_ser = ser ? (uint32_t)ser : serial;
     uint32_t use_seq = seqn ? (uint32_t)seqn : (*seq)++;
     uint64_t use_g = ((uint64_t)(uint32_t)g1 << 32) | (uint32_t)g0;
     if (!use_g) use_g = (*gran += (uint64_t)got);
-    if (emit_page_st(w, st, use_ser, use_seq, use_g, (ht & 2) != 0, (ht & 4) != 0, pkt,
-                     (uint32_t)got) < 0)
+    uint32_t room = w->cap - w->pos;
+    if (w->pos < kWant && kWant - w->pos < room) room = kWant - w->pos;
+    if (room < 28) {
+      free(pkt);
       break;
+    }
+    if (28 + (uint32_t)got > room) got = (int)(room - 28);
+    if (got < 1) {
+      free(pkt);
+      break;
+    }
+    emit_page_st(w, st, use_ser, use_seq, use_g, (ht & 2) != 0, (ht & 4) != 0, pkt, (uint32_t)got);
+    free(pkt);
     *gran = use_g;
     if (w->pos >= kWant) break;
   }
@@ -411,7 +465,7 @@ static int decode_body(Range *r, Models *m, Writer *w, int stat, int solid) {
   int have = 0;
   uint64_t gran = 0;
   PageStore st = {};
-  // Reconstruct range is separate from the control range (obj+4 vs esp+0x104).
+  // Reconstruct range starts after the first control bits (1,0,flag).
   Range rec = *r;
 #ifdef HOST_DEBUG
   fprintf(stderr, "range init code=%08x range=%08x first=%02x\n", r->code, r->range,
@@ -538,13 +592,13 @@ static int32_t decode(const uint8_t *src, uint32_t slen, uint8_t *dst, uint32_t 
     uint16_t *p = (uint16_t *)(m.mem + s * 0x2000 + 0x0c);
     init_freq(p, (0x2000 - 0x0c) / 2);
   }
-  // 0x1001e5a0: field models start biased to 0 (freq 0xffff) so BOS granule/serial/seq
-  // are 0. nsegs/body stay 0x8000 so the first 1 yields extra=1 / 0x1e-ish.
-  for (int s = 0; s < 0x37; s++) {
+  // 167c0 header slots 0..6: 0xffff so granule/serial/seq are 0.
+  for (int s = 0; s <= 6; s++) {
     uint16_t *f = (uint16_t *)(m.mem + s * 0x2000 + 0x0c);
     f[0] = f[1] = f[2] = f[3] = 0xffff;
   }
   ((uint16_t *)(m.mem + 0xa00c))[0] = 0x8000;
+  for (int i = 0x34 / 2; i < 0x834 / 2; i++) ((uint16_t *)(m.mem + 0xa000))[i] = 0xffff;
   ((uint16_t *)(m.mem + 0xc00c))[0] = 0x8000;
 
   Writer w = {dst, dcap, 0};
