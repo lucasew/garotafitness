@@ -72,8 +72,9 @@ func decodeWASM(src []byte) ([]byte, error) {
 	}
 	srcPtr := uint32(sp[0])
 	defer free.Call(ctx, uint64(srcPtr))
-	want := uint32(4 << 20)
-	if n := uint32(len(src)) * 8; n > want {
+	// fg-01 inner.fgpack is 255994514 bytes; OGGRE ratio can be ~1.2:1.
+	want := uint32(256 << 20)
+	if n := uint32(len(src)) * 2; n > want {
 		want = n
 	}
 	if want > 512<<20 {
