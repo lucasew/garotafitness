@@ -99,6 +99,29 @@ func TestHeaderHex(t *testing.T) {
 	}
 }
 
+func TestDumpAfterSREP(t *testing.T) {
+	t.Parallel()
+	f, err := os.Open("/tmp/gf-extract/fg01-after-srep.bin")
+	if err != nil {
+		t.Skip(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	rc, err := NewReader(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { rc.Close() })
+	h := crc32.NewIEEE()
+	n, err := io.Copy(h, rc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := h.Sum32()
+	if n != fg01InnerSize || got != fg01InnerCRC {
+		t.Logf("size %d want %d crc32 %08x want %08x", n, fg01InnerSize, got, fg01InnerCRC)
+	}
+}
+
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
 	f, err := os.Open(fg01Corpus)

@@ -26,8 +26,8 @@ const (
 // Official decode is PE: arc.ini unpackcmd oggre_dec.exe, installer
 // file cls-mpzz.dll (export name CLS-OGGRE.dll). That image is a
 // VirtualAlloc LZMA stub (lc=3,lp=0,pb=2) over the real CLS. INV-03
-// forbids running it. The guest is a mechanical RetDec transcription
-// of ClsMain/decode (CLS-OGGRE.c) compiled to wasm.
+// forbids running it. The guest reconstructs getbit (0x100038c0) and
+// the Ogg page walk from the unfiltered PE; it is not a RetDec blob.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
