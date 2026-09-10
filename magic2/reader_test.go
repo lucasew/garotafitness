@@ -149,6 +149,37 @@ func fg06Payload(t *testing.T) []byte {
 	return raw[5:]
 }
 
+func TestFG06WASMProgress(t *testing.T) {
+	t.Parallel()
+	src := fg06Payload(t)
+	out, ok := decodeWASM(src)
+	if len(out) < 4 {
+		t.Fatalf("wasm n=%d", len(out))
+	}
+	first := out[:4]
+	t.Logf("first32=%x ascii=%q", prefix(out, 32), prefix(out, 32))
+	// Default +0xc24==0 must emit INI ('[' or ';'), not the in-image
+	// LZ first tokens 04 04 08 06 (hi slot 0x0025 / lo 0x2025).
+	if out[0] == '[' || out[0] == ';' {
+		t.Log("INI prefix from 0x14005fc5d")
+	} else if bytes.Equal(first, []byte{0x04, 0x04, 0x08, 0x06}) {
+		t.Log("in-image LZ tokens; extras/0x14005fc5d not yet steering the first byte")
+	} else {
+		t.Logf("first tokens %x", first)
+	}
+	if len(out) >= emuSize+appidSize {
+		emu := crc32.ChecksumIEEE(out[:emuSize])
+		app := crc32.ChecksumIEEE(out[emuSize : emuSize+appidSize])
+		t.Logf("n=%d emu=%08x appid=%08x ok=%v", len(out), emu, app, ok)
+		if emu == 0xfb362bfa && app == appidCRC {
+			return
+		}
+	}
+	if !ok {
+		t.Log("appid CRC not matched yet")
+	}
+}
+
 func TestFG06SolidCRC(t *testing.T) {
 	t.Parallel()
 	const corpus = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-06.bin`

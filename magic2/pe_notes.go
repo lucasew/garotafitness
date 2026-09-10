@@ -248,6 +248,101 @@ package magic2
 //	Hi adapt >>6 toward 0x1f00; lo >>7 toward 0x1c00.
 //	Store: (hi<<4)|lo at [dict+pos] (0x14002bcf7).
 //
+//	cls11 @ 0x140039c1d uses model +0xb68 (allocated only if
+//	opt[+0x14]/+0xc34 != 0). First helper is a decode_int cousin
+//	(mix16+esc, CDF esi*17<<9+hist*34); second is 0x140036730
+//	(16-sym at min(bitlen(first),7), then +0xba0 nbits).
+//	ROLZ: slot = cursor[prev] + ~idx, wrap by cap; store pos,
+//	lookup ~list[slot].
+//
+//	Who writes +0xc34: ONLY 0x14003b934 movb 0x14(%rbx) (options
+//	parse). All other 0xc34 hits are cmpb $0. Parse has no
+//	in-image caller (packed). fg-06 bytes after DH(n)+0x1f are
+//	NOT that blob (would give width=156, blo=27). Stream does
+//	not set +0xc34. 0x14006f513 / 0x14006f7ab are past
+//	SizeOfImage 0x57000 — not in this PE.
+//
+//	decodeOpt common path (s<15) leaves the image:
+//	  0x14003b177 jmp 0x140075842          (renorm island)
+//	  then the in-image tail at 0x14003b2c6 stores id and
+//	  calls TWO more integers (always, unless id==0x3f):
+//	    0x140075b29  A=model+0x54     stack {0, nbits=6, 1}
+//	    0x140075b60  A=model+0x1900   same stack
+//	    0x140075ba2  A=model+0x31ac   only if kA6C7[id]!=0
+//	  x86 twins 0x4680ea / 0x468122 / 0x46816b, also past
+//	  SizeOfImage 0x4f000. Init 0x14003edb0 zeros +0x54 and
+//	  +0x1900; CDF rows for those helpers start at +0x80 /
+//	  after +0x190c. Return values become opt[4] / opt[8].
+//	  In-image cousin 0x14003b430 is the same model:
+//	    +0x08 ctx, +0x0c p0 (scale-15 >>4), +0x2c 16-sym,
+//	    +0x46c escape, +0x8ac bit tree, nbits=6 → mask 0x3f.
+//	  flag=1 skips the optional presence bit (else fg-06
+//	  extraA=extraB=0). With flag=1: extraA=16, extraB=18.
+//	After +0xb38 is set to stream.base+pos0, default
+//	+0xc24==0 (options blob[4], only written by parse
+//	0x14003b901; stream path leaves VirtualAlloc 0)
+//	calls 0x14005fc5d(obj, opt[4]) then a packed jmp.
+//	x86 twin 0x452748. 0x14005fc5d is past SizeOfImage
+//	0x57000. After return the parent reads +0x58 (bytes
+//	written). Parent already did stream.pos += extraB
+//	while leaving +0xb38 at the old pos (the prefix
+//	window). 0x14005fc5d can emit extraA dest bytes from
+//	that window (parent later reads +0x58; LZ 0x140029700
+//	continues at dest[+0x58] with prev=dest[+0x58-1] and
+//	a fresh LE dword from +0xb38). extraB=18 on fg-06:
+//	LZ-at-18 first byte is 0x7c '|'.
+//	Window hex 20 00 00 00 02 00 25 00 00 00 fa 03 72 05
+//	32 1a a8 0f. Fresh rANS there is state 0x20, so every
+//	default-init model yields first symbol 0 (16-sym /
+//	nibble-pair / FCM r10 / forced LZ lit / b430 skip).
+//	Raw extraA slice starts 0x20. Leftover option rANS
+//	(x=0x02004000 off=9) first bits are 1 (0x40/0x80).
+//	None of those cousins emit '[' / ';' / "[S".
+//
+//	pe_big1.bin (/tmp/lolzpe/pe_big1.bin, zlb+0x2aa195): 7-section
+//	x64, entry 0x1ccf4, SizeOfImage 0x4a000. SREP (FreeArc), not
+//	lolz/lolly. "Not an SREP compressed file", transfer_ReadBufsize.
+//	0x14005fc5d is past 0x4a000 — no prefix writer there.
+//	lolly-v20d3 (/tmp/lolly-v20d3-x64.bin = pe_2527637): 3-section
+//	unpacked v20d3, SizeOfImage 0x24000. Default +0x964==0 cousin
+//	is call 0x14001ecb4(obj, extraA); that VA is 2 bytes into a
+//	movdqu of CDF-init 0x14001ecb0, not a dest writer. +0xc24!=0
+//	cousin 0x1400185fc is mid FCM-alloc (0x140018320). v20 does
+//	not map 0x14005fc5d. v22 2-section image is section-merged
+//	(POGO: .text+.pdata+.rdata), RWX .text, no TLS; far E8/E9
+//	(0x14005fc5d / 0x140075842) are past SizeOfImage 0x57000.
+//	No zlib/UPX/aPLib overlay. Static unpack cannot recover the
+//	body without executing the PE (INV-03). Guest wires the
+//	in-image 0x14003b430 cousin extraA times on the +0xb38 window.
+//	Init 0x14003edb0 (thunk 0x140066d2e on obj+0xb90, size
+//	0x4a5c) copies uniform i*0x800 from 0x140002940 and
+//	p0=0x4000 from 0x14000a4c0. Extra models at +0x54 /
+//	+0x1900 start uniform; extraA's 16-sym adapts cdf[0]
+//	toward 4 (ctxa=5). x86 0x452748 is (eax=obj,
+//	edx=extraA) only — model is obj+0xb90. Leftover option
+//	rANS + adapted cdf[0] nibble-pairs start 0x77 'w',
+//	header p0 (now 0x4200) 8-bit starts 0x22. Still not INI.
+//	0x14003b430 does not load stack nbits (mask 0x3f is
+//	hardcoded). Init stride 0x44 is one ctx's 16-sym+escape
+//	pair; the live row is ctxa*34 at A+0x2c. In-image dest
+//	stores are only LZ lit 0x14002bcf7, match copies, and
+//	raw memcpy 0x140028d40. 6-bit leftover dest (nbits=6)
+//	starts 0x20 / '@' / '`' / '!' / 'A', not '['.
+//	0x140036b00 extraA dest (lookback=prev): leftover first
+//	mix-16 is s=8, kA6E7 nbits=11 base=2080, low 8 = 0x20
+//	space. Window first s=0 nbits=5 base=0 → 0x01. Not INI.
+//	In-image LZ @ 0x140029e04 with that reload (state 0x20,
+//	p0=0x2000, uniform mix) is forced to first byte 0x04
+//	(hi slot 0x0025, lo slot 0x2025). That cannot be INI
+//	text; the hole is still 0x14005fc5d (x86 0x452748,
+//	past .text), not another nibble-row tweak.
+//
+//	fg-06 ArC order (one magic2 solid @0x1F csz=93116):
+//	3 storing dirs, then steam_emu.ini 2895 fb362bfa,
+//	steam_appid.txt 6 f75982bb, two VDFs, rimworld.x3.
+//	CRC windows [0:2895] / [2895:2901] are the right members.
+//	steam_emu.ini is first; 04 04 08 06 cannot be its text.
+//
 //	See fcm.go for getBit / getNibble.
 //
 // DH(n is not stored as a C string in the image (no hit for those
