@@ -86,7 +86,7 @@ func decodeWASM(src []byte, dcap uint32) ([]byte, error) {
 	}
 	res, err := dec.Call(ctx, uint64(srcPtr), uint64(len(src)), uint64(dstPtr), uint64(dcap))
 	if err != nil {
-		return nil, fmt.Errorf("rzw: decode: %w", errCodec)
+		return nil, fmt.Errorf("rzw: decode: %v: %w", err, errCodec)
 	}
 	n := uint32(res[0])
 	if n == 0 || n > dcap {

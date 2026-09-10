@@ -27,9 +27,11 @@ const (
 	numTok
 )
 
-// rz 1.00 encode uses dual u16 rANS, scale 2^14, renorm at <=0xffff
-// (cmp [ctx+0x40], 0xffff then swap with [ctx+0x3c]). Decode 0x409050
-// is the RetDec guest (rzwdec.wasm). Header crc is IEEE of the plain.
+// rz 1.00 uses dual u32 rANS, 16-bit renormalization at <=0xffff,
+// binary models at scale 2^12 and nibble models at scale 2^14.
+// The decode vtable slot is 0x4022b0 (0x409050 is the encoder).
+// Binary rANS: PE 0x4023ef `cmp freq,slot; jbe match` — literal iff slot < freq.
+// Header crc is IEEE of the plain.
 func decompress(packed []byte, h header) ([]byte, error) {
 	if len(packed) != int(h.packed) {
 		return nil, fmt.Errorf("rzw: packed %d want %d: %w", len(packed), h.packed, errCodec)
@@ -41,12 +43,16 @@ func decompress(packed []byte, h header) ([]byte, error) {
 	if dcap > 512<<20 {
 		dcap = 512 << 20
 	}
-	plain, err := decodeWASM(packed, dcap)
-	if err != nil {
-		return nil, fmt.Errorf("rzw: packed %d crc %#x extra %d: %w", h.packed, h.crc, h.extra, err)
-	}
-	if crc32.ChecksumIEEE(plain) != h.crc {
-		return nil, fmt.Errorf("rzw: crc %#x: %w", h.crc, errCodec)
+	plain, err := decodeNative(packed, int(dcap))
+	if err != nil || crc32.ChecksumIEEE(plain) != h.crc {
+		// WASM guest is the RetDec transcription; keep it as a second try.
+		if wplain, werr := decodeWASM(packed, dcap); werr == nil && crc32.ChecksumIEEE(wplain) == h.crc {
+			return wplain, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("rzw: packed %d crc %#x extra %d: %w", h.packed, h.crc, h.extra, err)
+		}
+		return nil, fmt.Errorf("rzw: crc %#x got %#x: %w", h.crc, crc32.ChecksumIEEE(plain), errCodec)
 	}
 	return plain, nil
 }
