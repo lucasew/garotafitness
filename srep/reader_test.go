@@ -73,6 +73,15 @@ func TestNewReaderCorpus(t *testing.T) {
 	if string(buf) != "OGGRE" {
 		t.Fatalf("inner magic %q", buf)
 	}
+	// FreeArc trailer after the last literal block is not an SREP header.
+	n, err := io.Copy(io.Discard, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 5 bytes already read + remainder = 216364145
+	if n+5 != 216364145 {
+		t.Fatalf("after-srep %d; want %d", n+5, 216364145)
+	}
 }
 
 func literalSolid(plain []byte) []byte {

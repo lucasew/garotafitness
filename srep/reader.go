@@ -185,6 +185,11 @@ func (r *reader) next() ([]byte, error) {
 		return nil, io.EOF
 	}
 	if origSize > maxBlock || dataSize > maxBlock || statSize > maxBlock {
+		// fg-01: last literal block is followed by a FreeArc trailer
+		// that is not an SREP header. After a successful stream, stop.
+		if r.start > 0 {
+			return nil, io.EOF
+		}
 		return nil, errTooLarge
 	}
 	stat := make([]byte, statSize)
