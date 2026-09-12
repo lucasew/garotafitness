@@ -172,6 +172,13 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 			return err
 		}
 	}
+	var extra [1]byte
+	if _, err := io.ReadFull(src, extra[:]); err != io.EOF {
+		if err != nil {
+			return fmt.Errorf("finish solid: %w", err)
+		}
+		return fmt.Errorf("solid contains data after its final member")
+	}
 	return nil
 }
 
@@ -180,7 +187,11 @@ func writeMember(dst Dest, m Member, r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	h := crc32.NewIEEE()
+	table := m.crcTable
+	if table == nil {
+		table = crc32.IEEETable
+	}
+	h := crc32.New(table)
 	n, err := io.Copy(w, io.TeeReader(r, h))
 	if err != nil {
 		w.Close()
@@ -192,7 +203,7 @@ func writeMember(dst Dest, m Member, r io.Reader) error {
 	if uint64(n) != m.Size {
 		return fmt.Errorf("write %s: size %d want %d", m.Path, n, m.Size)
 	}
-	if m.CRC != 0 && h.Sum32() != m.CRC {
+	if (m.crcTable != nil || m.CRC != 0) && h.Sum32() != m.CRC {
 		return fmt.Errorf("write %s: crc %08x want %08x", m.Path, h.Sum32(), m.CRC)
 	}
 	return nil

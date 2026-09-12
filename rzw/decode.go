@@ -5,8 +5,7 @@ import (
 	"hash/crc32"
 )
 
-// Token names from encode.su 3281 (Shelwien). rz 1.00 encode
-// switch at 0x40288c / decode switch at 0x40a106 are 16-way.
+// Token order in the rz 1.00 decoder jump table at 0x42a000.
 const (
 	tokDelta1xU8 = iota
 	tokDelta2xU8
@@ -27,32 +26,61 @@ const (
 	numTok
 )
 
-// rz 1.00 uses dual u32 rANS, 16-bit renormalization at <=0xffff,
-// binary models at scale 2^12 and nibble models at scale 2^14.
-// The decode vtable slot is 0x4022b0 (0x409050 is the encoder).
-// Binary rANS: PE 0x4023ef `cmp freq,slot; jbe match` — literal iff slot < freq.
-// Header crc is IEEE of the plain.
-func decompress(packed []byte, h header) ([]byte, error) {
-	if len(packed) != int(h.packed) {
-		return nil, fmt.Errorf("rzw: packed %d want %d: %w", len(packed), h.packed, errCodec)
+// Decode each logical stream, restore the instruction and duplicate transforms,
+// and check every stored file CRC before exposing any bytes to the caller.
+func (a *archive) decode() ([]byte, error) {
+	m, err := readMetadata(a.streams[0])
+	if err != nil {
+		return nil, err
 	}
-	dcap := uint32(len(packed)) * 64
-	if dcap < 1<<20 {
-		dcap = 1 << 20
-	}
-	if dcap > 512<<20 {
-		dcap = 512 << 20
-	}
-	plain, err := decodeNative(packed, int(dcap))
-	if err != nil || crc32.ChecksumIEEE(plain) != h.crc {
-		// WASM guest is the RetDec transcription; keep it as a second try.
-		if wplain, werr := decodeWASM(packed, dcap); werr == nil && crc32.ChecksumIEEE(wplain) == h.crc {
-			return wplain, nil
+	size := uint64(0)
+	for _, f := range m.files {
+		if f.attributes&0x10 != 0 {
+			if f.size != 0 {
+				return nil, fmt.Errorf("rzw: nonempty directory")
+			}
+			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("rzw: packed %d crc %#x extra %d: %w", h.packed, h.crc, h.extra, err)
+		if f.size > 512<<20-size {
+			return nil, errTooLarge
 		}
-		return nil, fmt.Errorf("rzw: crc %#x got %#x: %w", h.crc, crc32.ChecksumIEEE(plain), errCodec)
+		size += f.size
 	}
-	return plain, nil
+	for _, s := range a.streams[5:] {
+		if len(s) != 0 {
+			return nil, fmt.Errorf("rzw: unexpected logical stream")
+		}
+	}
+	records, n, err := readDuplicates(a.streams[1], m.window, int(size))
+	if err != nil {
+		return nil, err
+	}
+	operands, err := decodeFrames(a.streams[2], n)
+	if err != nil {
+		return nil, err
+	}
+	data, err := decodeFrames(a.streams[4], n)
+	if err != nil {
+		return nil, err
+	}
+	data, err = restoreInstructions(a.streams[3], data, operands, n)
+	if err != nil {
+		return nil, err
+	}
+	data, err = restoreDuplicates(data, records, int(size))
+	if err != nil {
+		return nil, err
+	}
+	off := 0
+	for _, f := range m.files {
+		if f.attributes&0x10 != 0 {
+			continue
+		}
+		end := off + int(f.size)
+		if got := crc32.ChecksumIEEE(data[off:end]); got != f.crc {
+			return nil, fmt.Errorf("rzw: %s CRC %08x, want %08x", f.name, got, f.crc)
+		}
+		off = end
+	}
+	return data, nil
 }

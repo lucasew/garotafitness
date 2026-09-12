@@ -1,79 +1,48 @@
 package magic2
 
 import (
-	"errors"
+	"encoding/binary"
+	"fmt"
 	"io"
 )
 
-// lolzTag is the 4-byte tag on RimWorld fg-02 and fg-06 solids.
-const lolzTag = "DH(n"
+const headerLen = 9
 
-// verV22c4b is the byte after the tag on both RimWorld solids
-// (FitGirl magic2 = lolz v22c4b).
-const verV22c4b = 0x1f
-
-// headerLen is the proven on-disk prefix. Unproven bytes stay in the
-// bitstream for decodeStream.
-const headerLen = 5
-
-// On-disk layout (lolz v22c4b), live RimWorld solids at volume 0x1F.
-//
-//	off  n   field     end.  status
-//	0    4   tag       ASCII proved: both heads "DH(n"
-//	4    1   version         proved: both heads 0x1f; PE "lolz v22c4b [Dec 30 2018]"
-//	5    …   bitstream       unproved: ParseHeader does not consume
-//
-// After +5 (testdata leftover; not a parsed field):
-//
-//	fg-06  20 00 00 00 02 00 25 00 00 00 fa …
-//	fg-02  c0 03 77 00 ac 03 04 61 00 00 07 …
-//
-// Shared zeros at +8, +13, +14 are two-sample coincidence, not a field.
-//
-// Guessed, not consumed:
-//
-//	+5 u32be rANS state  fg-06 0x20000000  fg-02 0xc0037700
-//	  Both >= L=1<<23 (PE cmp + shl-8/movzx renormalize). The LE
-//	  readings 0x20 and 0x007703c0 are < L, so a 32-bit rANS init
-//	  here would have to be big-endian. No init site is pinned to +5.
-//
-// Disproved on these two heads:
-//
-//	v20 32-byte options blob (dict<<24, -blo/-bll/-blr/-bm/-bc).
-//	  A LE store of dict<<24 is 00 00 00 XX; live first dword is not.
-//	  The two solids do not share a 32-byte options prefix.
-//	  optionTable32 in tables.go is the in-memory default block
-//	  before "available options", not this prefix.
-//	Plain sizes 93116, 430889, 2895, 6, 190, 13622, 414176, count 5,
-//	  and the five IEEE CRCs: none appear as u16/u32/u64 LE/BE in the
-//	  fg-06 solid (whole csz). orig/csz live in the ArC directory.
-//	Method strings are "magic2" and "srep:m3yf+magic2" (no :d/:blo).
-//
-// cls-magic2 ReadFile(9) when [ctx+0x254]==1 is the CLS transfer
-// record, not this prefix.
-
-// Header is the identified prefix of a lolz v22c4b stream.
+// Header contains the packed LOLZ options. The apparent "DH(n" prefix
+// is an options word, not a signature (cls-magic2_x64, VA 0x140013e7d).
 type Header struct {
-	Tag [4]byte
-	Ver byte
+	DictionarySize                                                uint32
+	Workers                                                       int
+	Mixed                                                         bool
+	Independent                                                   bool
+	LongDistance                                                  bool
+	ROLZ                                                          bool
+	LiteralMode                                                   byte
+	ColorMode, AlphaMode, ImageMode                               byte
+	ClassShift, HighShift, LowShift, PredictionShift, WeightShift uint
 }
 
-// ParseHeader reads the 5-byte tag+version prefix.
 func ParseHeader(r io.Reader) (Header, error) {
 	var b [headerLen]byte
 	if _, err := io.ReadFull(r, b[:]); err != nil {
 		return Header{}, err
 	}
-	if string(b[:4]) != lolzTag {
-		return Header{}, errMagic
+	flags := binary.LittleEndian.Uint32(b[:4])
+	opts := binary.LittleEndian.Uint32(b[4:8])
+	h := Header{DictionarySize: ((opts >> 13) & 127) << 24, Workers: int((opts>>20)&15) + 1,
+		Mixed: flags&(1<<30) != 0, Independent: flags>>31 != 0, LongDistance: b[8]&1 != 0,
+		ROLZ: (opts>>11)&3 != 0, LiteralMode: byte((opts >> 8) & 7),
+		ColorMode: byte((flags >> 26) & 7), AlphaMode: byte((flags >> 23) & 7), ImageMode: (b[8] >> 1) & 7}
+	shifts := []*uint{&h.ClassShift, &h.WeightShift, &h.LowShift, &h.PredictionShift, &h.HighShift}
+	for i, p := range shifts {
+		n := (flags >> uint(i*4)) & 15
+		if n > 8 {
+			return Header{}, fmt.Errorf("magic2: invalid context width %d", n)
+		}
+		*p = uint(8 - n)
 	}
-	if b[4] != verV22c4b {
-		return Header{}, errVersion
+	if h.DictionarySize == 0 || b[8]&0xf0 != 0 {
+		return Header{}, fmt.Errorf("magic2: invalid options")
 	}
-	var h Header
-	copy(h.Tag[:], b[:4])
-	h.Ver = b[4]
 	return h, nil
 }
-
-var errVersion = errors.New("magic2: unsupported version")

@@ -1,18 +1,5 @@
-// Package rzw decodes the FitGirl rzw/rzwb atom (Christian Martelock RAZOR).
-//
-// On-disk tag is CM( (version 0x00000605). rzwb solids and 4x4-inner rzw
-// packets prefix a little-endian u32 size (rzwrap_v0: size includes those
-// 4 bytes). A bare CM( stream is also accepted.
-//
-// Official decode is PE: arc.ini unpackcmd `rzw d f2 f1 128 128` (rzw)
-// and `rzw d f2 f1 1023 1023` (rzwb); installer files rzw.exe, rz.exe,
-// razor.dll. INV-03 forbids running them.
-//
-// Stream after CM(: u32 crc (IEEE of plain), u32 packed, u16 extra,
-// then packed bytes of ROLZ + 16 token types + interleaved adaptive
-// nibble rANS (encode.su 2829/3281). rz 1.00 vtable pairs 0x409050
-// (decode) with 0x4022b0 (encode). Read loads the packed payload and
-// runs decode; an unfinished kernel is errCodec, not a guessed CRC.
+// Package rzw decodes CM version 5 RAZOR archives and their rzw/rzwb wrappers.
+// All framing, entropy decoding, and transforms run in Go.
 package rzw
 
 import (
@@ -24,10 +11,8 @@ import (
 
 const (
 	razor   = "CM("
-	version = 0x00000605
-	// cmLen is bytes from CM( through the trailing u16.
-	// CM( + u32 version + u32 crc + u32 packed + u16 extra.
-	cmLen = 3 + 4 + 4 + 4 + 2
+	version = 5
+	cmLen   = 17 // four magic bytes plus a checksummed six-byte index offset
 	// maxPacked covers fg-03 rzwb (~17 MiB packed) and 4x4 packets.
 	maxPacked = 64 << 20
 )
@@ -45,53 +30,46 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 }
 
 type header struct {
-	prefix uint32
-	crc    uint32
-	packed uint32
-	extra  uint16
+	prefix      uint32 // wrapper length, including its four-byte length field
+	indexOffset uint64 // relative to the CM magic
 }
 
 func parseHeader(r io.Reader) (header, error) {
-	var peek [7]byte
-	n, err := io.ReadFull(r, peek[:])
-	if n == 0 && (err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF)) {
-		return header{}, io.EOF
-	}
-	if err != nil {
-		return header{}, err
-	}
 	var h header
-	var cm [cmLen]byte
-	switch {
-	case string(peek[:3]) == razor:
-		copy(cm[:7], peek[:])
-		if _, err := io.ReadFull(r, cm[7:]); err != nil {
-			if errors.Is(err, io.EOF) {
-				return header{}, io.ErrUnexpectedEOF
-			}
-			return header{}, err
-		}
-	case string(peek[4:7]) == razor:
-		h.prefix = binary.LittleEndian.Uint32(peek[:4])
-		copy(cm[:3], peek[4:])
-		if _, err := io.ReadFull(r, cm[3:]); err != nil {
-			if errors.Is(err, io.EOF) {
-				return header{}, io.ErrUnexpectedEOF
-			}
-			return header{}, err
-		}
-	default:
-		return header{}, errMagic
+	var magic [4]byte
+	if _, err := io.ReadFull(r, magic[:]); err != nil {
+		return h, err
 	}
-	ver := binary.LittleEndian.Uint32(cm[3:7])
-	if ver != version {
-		return header{}, fmt.Errorf("rzw: version %#x: %w", ver, errVersion)
+	if string(magic[:3]) != razor {
+		h.prefix = binary.LittleEndian.Uint32(magic[:])
+		if _, err := io.ReadFull(r, magic[:]); err != nil {
+			return h, err
+		}
+		if string(magic[:3]) != razor {
+			return h, errMagic
+		}
+		if h.prefix < 4+cmLen || h.prefix > maxPacked {
+			return h, errTooLarge
+		}
 	}
-	h.crc = binary.LittleEndian.Uint32(cm[7:11])
-	h.packed = binary.LittleEndian.Uint32(cm[11:15])
-	h.extra = binary.LittleEndian.Uint16(cm[15:17])
-	if h.packed == 0 || h.packed > maxPacked {
-		return header{}, fmt.Errorf("rzw: packed %d: %w", h.packed, errTooLarge)
+	if magic[3] != version {
+		return h, errVersion
+	}
+	payload, err := readFrame(r, 6)
+	if err != nil {
+		return h, err
+	}
+	if len(payload) != 6 {
+		return h, fmt.Errorf("rzw: invalid header frame")
+	}
+	for i, b := range payload {
+		h.indexOffset |= uint64(b) << uint(8*i)
+	}
+	if h.indexOffset < cmLen || h.indexOffset > maxPacked {
+		return h, errTooLarge
+	}
+	if h.prefix != 0 && h.indexOffset >= uint64(h.prefix-4) {
+		return h, fmt.Errorf("rzw: index outside wrapper")
 	}
 	return h, nil
 }
@@ -106,6 +84,9 @@ type reader struct {
 }
 
 func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	if r.err != nil && r.off >= len(r.buf) {
 		return 0, r.err
 	}
@@ -136,18 +117,23 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) decode() ([]byte, error) {
-	packed := make([]byte, r.hdr.packed)
-	if _, err := io.ReadFull(r.src, packed); err != nil {
-		if errors.Is(err, io.EOF) {
-			return nil, io.ErrUnexpectedEOF
-		}
-		return nil, fmt.Errorf("rzw: packed: %w", err)
+	src := r.src
+	var limited *io.LimitedReader
+	if r.hdr.prefix != 0 {
+		limited = &io.LimitedReader{R: src, N: int64(r.hdr.prefix) - 4 - cmLen}
+		src = limited
 	}
-	plain, err := decompress(packed, r.hdr)
+	a, err := readArchive(src, r.hdr.indexOffset)
 	if err != nil {
+		if errors.Is(err, io.EOF) {
+			err = io.ErrUnexpectedEOF
+		}
 		return nil, err
 	}
-	return plain, nil
+	if limited != nil && limited.N != 0 {
+		return nil, fmt.Errorf("rzw: trailing wrapper bytes")
+	}
+	return a.decode()
 }
 
 var (
@@ -156,5 +142,5 @@ var (
 	errVersion  = errors.New("rzw: bad version")
 	errClosed   = errors.New("rzw: closed")
 	errTooLarge = errors.New("rzw: packed too large")
-	errCodec    = errors.New("rzw: ROLZ+rANS kernel not lifted")
+	errCodec    = errors.New("rzw: invalid compressed data")
 )

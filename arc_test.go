@@ -1,11 +1,60 @@
 package garotafitness
 
 import (
+	"bytes"
+	"encoding/hex"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestArchiveDescriptorCRC(t *testing.T) {
+	// The real fg-05 footer descriptor, including its custom CRC at the end.
+	raw, err := hex.DecodeString("41724301086c7a6d613a6d666274343a64316d006278a0d4e6fdaa1828fb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := parseLocal(raw)
+	if err != nil || d.table != fitgirlCRCTable {
+		t.Fatalf("descriptor: %+v %v", d, err)
+	}
+	standard := bytes.Clone(raw)
+	crc := crc32.ChecksumIEEE(standard[:len(standard)-4])
+	for i := 0; i < 4; i++ {
+		standard[len(standard)-4+i] = byte(crc >> (8 * i))
+	}
+	d, err = parseLocal(standard)
+	if err != nil || d.table != crc32.IEEETable {
+		t.Fatalf("standard descriptor: %+v %v", d, err)
+	}
+	for i := range raw {
+		bad := bytes.Clone(raw)
+		bad[i] ^= 1
+		if _, err := parseLocal(bad); err == nil {
+			t.Fatalf("corrupt descriptor accepted at %d", i)
+		}
+	}
+}
+
+func TestExtractRimWorldDecodedVolumes(t *testing.T) {
+	for _, name := range []string{"fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin", "fg-05.bin", "fg-06.bin"} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := os.Stat(filepath.Join(rimworldCorpus, name)); os.IsNotExist(err) {
+				t.Skip("corpus not mounted")
+			}
+			dst, err := OpenDirDest(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			e := Extractor{Source: os.DirFS(rimworldCorpus), Dest: dst}
+			if err := extractVolume(t.Context(), e, Volume{Name: name}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 const rimworldCorpus = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]`
 

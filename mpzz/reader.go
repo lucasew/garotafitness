@@ -18,16 +18,8 @@ const (
 
 // NewReader wraps an OGGRE stream as compress/gzip does.
 //
-// On-disk: "OGGRE" + u8 version + u8 flags, then a 16-bit range-coded
-// payload that rebuilds Ogg pages (writes "OggS") and setup frames.
-// flags bits 0-2 are books-stat (0..3); bit 3 is solid. fg-01 is
-// version 0, flags 0x09 (-s1, solid). Not LZMA/zstd/gzip.
-//
-// Official decode is PE: arc.ini unpackcmd oggre_dec.exe, installer
-// file cls-mpzz.dll (export name CLS-OGGRE.dll). That image is a
-// VirtualAlloc LZMA stub (lc=3,lp=0,pb=2) over the real CLS. INV-03
-// forbids running it. The guest reconstructs getbit (0x100038c0) and
-// the Ogg page walk from the unfiltered PE; it is not a RetDec blob.
+// The native decoder reconstructs Ogg packets from separate command,
+// header, and audio ranges. Solid streams share adaptive codebook models.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
@@ -64,22 +56,22 @@ func parseHeader(r io.Reader) (header, error) {
 }
 
 type reader struct {
-	src io.Reader
-	hdr header
-	buf []byte
-	off int
-	err error
-	eof bool
+	src     io.Reader
+	hdr     header
+	buf     []byte
+	off     int
+	err     error
+	decoder *oggreDecoder
 }
 
 func (r *reader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
 	if r.err != nil && r.off >= len(r.buf) {
 		return 0, r.err
 	}
 	if r.off >= len(r.buf) {
-		if r.eof {
-			return 0, io.EOF
-		}
 		if err := r.fill(); err != nil {
 			r.err = err
 			return 0, err
@@ -94,26 +86,24 @@ func (r *reader) Close() error {
 	r.err = errClosed
 	r.buf = nil
 	r.src = nil
+	r.decoder = nil
 	return nil
 }
 
 func (r *reader) fill() error {
-	rest, err := io.ReadAll(r.src)
-	if err != nil {
-		return fmt.Errorf("mpzz: v%d flags %#x: %w", r.hdr.ver, r.hdr.flags, err)
+	if r.decoder == nil {
+		d, err := newOGGREDecoder(r.src, r.hdr)
+		if err != nil {
+			return err
+		}
+		r.decoder = d
 	}
-	src := make([]byte, 7+len(rest))
-	copy(src, oggre)
-	src[5] = r.hdr.ver
-	src[6] = r.hdr.flags
-	copy(src[7:], rest)
-	out, err := decodeWASM(src)
+	out, err := r.decoder.next()
 	if err != nil {
-		return fmt.Errorf("mpzz: v%d flags %#x: %w", r.hdr.ver, r.hdr.flags, err)
+		return err
 	}
 	r.buf = out
 	r.off = 0
-	r.eof = true
 	return nil
 }
 
@@ -123,5 +113,4 @@ var (
 	errVersion = errors.New("mpzz: bad version")
 	errFlags   = errors.New("mpzz: bad flags")
 	errClosed  = errors.New("mpzz: closed")
-	errGuest   = errors.New("mpzz: guest")
 )

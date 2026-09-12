@@ -1,16 +1,7 @@
 package rzw
 
-// Native RAZOR 1.00 decoder lifted from rz.exe (22_pe_22, data only).
-// Dual u32 rANS, 16-bit renorm, binary scale 12, nibble scale 14.
-//
-// Encode 0x4022b0 switch 0x40288c / table 0x42a000: tok9 0x404752.
-// Decode 0x409050 switch 0x40a106 / table 0x42a054:
-//   tok0 0x40aab2 Delta1xU8 … tok9 0x40b07c ImagePred,
-//   tok14 0x40abb8 Literals32, tok15 0x40a8ae RawBytes.
-// No dest write of dataSize/tableSize before the first token; pos 0x12750=0.
-// Encode residuals at 0x40aab2..: pred = out[i-N], sign(prev Δ) context.
-// ROLZ 32-sym CDFs at obj+0xb5d0 (0x4031c0). Far 24-sym at obj+0x9ae0.
-// Binary: PE `cmp freq,slot; jbe match` — literal only when slot < freq.
+// RAZOR 1.00: dual u32 rANS, 16-bit refill, binary scale 12, CDF scale 14.
+// Decoder 0x4022b0, token jump table 0x42a000, constructor 0x40c610.
 
 const (
 	ransLimit = 0xffff
@@ -28,7 +19,6 @@ const (
 	kindRolz  = 2
 	kindFar   = 3
 	kindRep   = 1
-	rolzHist  = 512
 )
 
 // Byte-class tables at 0x42a140 / 0x42a160 (rz 1.00 .rdata).
@@ -108,8 +98,6 @@ var rolzBase [32]int
 var resBase16 [16]int
 var imgBase20 [20]int
 
-const resBias16 = 0 // unsigned wrap; 0 and 255 sit on extra-0 symbols
-
 // FSM next/remap from ctor 0x428110 (loop-back reconstruction of the
 // 0x44f72f tail). next[s][0/1] at 0x431f60+2*s; remap at +512.
 var fsmNext0 = [256]byte{
@@ -174,12 +162,26 @@ type rans struct {
 	src    []byte
 	off    int // initial state bytes; refills do not move this
 	end    int // next unread u16 is src[end-2:end] (PE 0x418310)
-	stay0  bool // after no-swap RawBytes: refill s0, do not swap
+
+	frames [][]byte
 }
 
 func (r *rans) refill() {
 	// PE 0x418310: count--, s0 = s0<<16 | buf[count] (u16s from the tail).
-	if r.end < 10 {
+	if r.end == 0 && len(r.frames) != 0 {
+		p := r.frames[0]
+		r.frames = r.frames[1:]
+		if len(p) < 8 || len(p)%2 != 0 {
+			r.off = len(r.src) + 1
+			return
+		}
+		r.src = p
+		r.end = len(p) - 8
+		r.s0 = uint32(p[len(p)-4]) | uint32(p[len(p)-3])<<8 | uint32(p[len(p)-2])<<16 | uint32(p[len(p)-1])<<24
+		r.s1 = uint32(p[len(p)-8]) | uint32(p[len(p)-7])<<8 | uint32(p[len(p)-6])<<16 | uint32(p[len(p)-5])<<24
+		return
+	}
+	if r.end < 2 {
 		r.off = len(r.src) + 1
 		return
 	}
@@ -195,10 +197,14 @@ func (r *rans) swap() {
 }
 
 func (r *rans) ok() bool {
-	return r.off <= len(r.src) && r.end >= 8
+	return r.off <= len(r.src) && r.end >= 0
 }
 
 func (r *rans) bits(n int) uint32 {
+	if n > 16 {
+		hi := r.bits(n - 16)
+		return hi<<16 | r.bits(16)
+	}
 	r.swap()
 	if !r.ok() || n <= 0 {
 		return 0
@@ -280,25 +286,6 @@ func (m *nibModel) init() {
 	}
 }
 
-// PE 0x41bb50: dst[0]=0, dst[i]=0x407f-n+i. First symbol is 0
-// for almost every slot (not uniform i<<10).
-func (m *nibModel) initTgt(s int) {
-	n := len(m)
-	if s < 0 {
-		s = 0
-	}
-	if s >= n {
-		s = n - 1
-	}
-	for i := 0; i < n; i++ {
-		if i <= s {
-			m[i] = uint16(i)
-		} else {
-			m[i] = uint16(0x407f - n + i)
-		}
-	}
-}
-
 func (m *nibModel) sym(r *rans) int {
 	r.swap()
 	if !r.ok() {
@@ -316,9 +303,6 @@ func (m *nibModel) sym(r *rans) int {
 	end := uint32(m[(s+1)&15])
 	freq := (end - start) & nibMask
 	if freq == 0 {
-		// calloc zeros (0x40d96c). First hit is t15 (search from 15).
-		// 0x41fd30 adapt is (tgt-cur)>>7; fillTgt(15) is 0..15 so
-		// zeros stay zeros. Do not invent a uniform seed.
 		freq = 1
 	}
 	r.s0 = (r.s0>>nibScale)*freq + ((r.s0 - start) & nibMask)
@@ -329,7 +313,6 @@ func (m *nibModel) sym(r *rans) int {
 var nibTgt16 [16][16]uint16
 var rolzTgt32 [32][32]uint16
 var farTgt24 [24][24]uint16
-var imgTgt20 [20][20]uint16
 
 func fillTgt(dst []uint16, s, n int) {
 	for i := 0; i < n; i++ {
@@ -349,10 +332,9 @@ func init() {
 		fillTgt(rolzTgt32[s][:], s, 32)
 	}
 	for s := 0; s < 24; s++ {
-		fillTgt(farTgt24[s][:], s, 24)
-	}
-	for s := 0; s < imgSyms; s++ {
-		fillTgt(imgTgt20[s][:], s, imgSyms)
+		fillTgt(farTgt24[s][:], s, 22)
+		farTgt24[s][22] = 16384
+		farTgt24[s][23] = 16384
 	}
 	b := 0
 	for i := range farBase {
@@ -439,9 +421,17 @@ func (m *rolzModel) sym(r *rans) int {
 type farModel [24]uint16
 
 func (m *farModel) init() {
-	for i := 0; i < farSyms; i++ {
-		m[i] = uint16(i * (1 << nibScale) / farSyms)
+	weights := [...]byte{4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+	total, sum := 0, 0
+	for _, w := range weights {
+		total += int(w)
 	}
+	for i, w := range weights {
+		m[i] = uint16(sum * 16384 / total)
+		sum += int(w)
+	}
+	m[22] = 16384
+	m[23] = 16384
 }
 
 func (m *farModel) adapt(s int) {
@@ -482,103 +472,44 @@ func (m *farModel) sym(r *rans) int {
 	return s
 }
 
-// 20-sym ImagePred residual CDF (0x4315c0 n=20, scale 14, 0x404a19).
-type imgModel [20]uint16
-
-func (m *imgModel) init() {
-	for i := 0; i < imgSyms; i++ {
-		m[i] = uint16(i * (1 << nibScale) / imgSyms)
-	}
-}
-
-func (m *imgModel) adapt(s int) {
-	if s < 0 {
-		s = 0
-	}
-	if s > imgSyms-1 {
-		s = imgSyms - 1
-	}
-	tgt := imgTgt20[s]
-	for i := range m {
-		d := int16(tgt[i]) - int16(m[i])
-		m[i] = uint16(int16(m[i]) + (d >> adaptSh))
-	}
-}
-
-func (m *imgModel) sym(r *rans) int {
-	r.swap()
-	if !r.ok() {
-		return 0
-	}
-	slot := int(r.s0&nibMask) + 1
-	s := 0
-	for i := imgSyms - 1; i >= 0; i-- {
-		if int(m[i]) < slot {
-			s = i
-			break
-		}
-	}
-	start := uint32(m[s])
-	end := uint32(0)
-	if s+1 < imgSyms {
-		end = uint32(m[s+1])
-	}
-	freq := (end - start) & nibMask
-	if freq == 0 {
-		freq = 1
-	}
-	r.s0 = (r.s0>>nibScale)*freq + ((r.s0 - start) & nibMask)
-	m.adapt(s)
-	return s
-}
-
 type dec struct {
-	r        rans
-	out      []byte
-	pos      int
-	a8       int
-	reps     [4]int
-	bin      []binModel
-	nibLit   []nibModel // 0x11c0: [13][81] unmatched+predicted
-	tok      nibModel   // 0x9ac0 token type
-	lenNib   nibModel   // match/token length
-	far24    farModel   // 0x9ae0 24-sym first far symbol
-	farNib   [2]nibModel
-	rolz32   []rolzModel // 0xb5d0: 32-sym per prev byte
-	rolzLen  [2]nibModel
-	resNib   []nibModel  // token residual, 16 ctx × 16
-	imgM     [3]imgModel // 0x42c150/0x4315c0 20-sym, first-row per channel
-	imgWM    imgModel    // 0x41f7fc width integer
-	imgRice  [3]int      // 0xffd0 G, 0x102e0 R, 0x105f0 B
-	imgBit   binModel    // 0x10fb0 ImagePred width bit (adapt >>5)
-	rawBit   binModel    // unused; t15 is bits(16), not 16 binary bits
-	imgW     int
-	stRec    [320][4]byte
-	nLit     int
-	nMat     int
-	nTok     int
-	why      string
-	rolz     [256][]int
-	lastKind int
-	lastRes  [4]int
-	ev       []string
-	altRes   int // 0=table, 1=two nibbles
-	altImg   int // 0=width*3, 1=8 residuals no width bits
-	altRaw   int // 0=rawNoSwap (PE 406fc2), see raw* consts
-	rawN     int // u16s already written in the current RawBytes
-	lim      int // dest cap from first 8 bytes when they parse as Delta
-	noChunk  bool // first t15: header only, no dest[8:12] CHUNK_SIZE
-}
+	overflow      bool
+	mono8         audio8
+	stereo8       audio8
+	mono16        audio8
+	stereo16      audio8
+	color         [2][3][24]uint16
+	alpha         nibModel
+	literalRun    [17]nibModel
+	literalRunEnd int
+	matches       [256][]matchRecord
+	matchLen      [48]farModel
+	farLow        [22]nibModel
+	farHigh       [22]nibModel
+	farLen        [56]nibModel
+	repSlot       [14]nibModel
+	repLen        [28]nibModel
+	u8            [4][8]nibModel
+	u16x2         [4]rolzModel
+	u16           [2]rolzModel
+	u32           [2]rolzModel
+	r             rans
+	out           []byte
+	pos           int
+	a8            int
+	reps          [4]int
+	bin           []binModel
+	nibLit        []nibModel // 0x11c0: [13][81] unmatched+predicted
+	tok           nibModel   // 0x9ac0 token type
 
-const (
-	rawNoSwap  = iota // s0&0xffff, s0>>=16, no pre-swap
-	rawFirstNS        // first u16 no swap; later u16s bits(16)
-	rawBits16
-	rawBinLSB
-	rawBinMSB
-	rawImgU
-	rawNib
-)
+	far24 farModel // 0x9ae0 24-sym first far symbol
+
+	rolz32 []rolzModel // 0xb5d0: 32-sym per prev byte
+
+	stRec [320][4]byte
+
+	why string
+}
 
 func newDec(src []byte, cap int) *dec {
 	d := &dec{
@@ -586,46 +517,82 @@ func newDec(src []byte, cap int) *dec {
 		bin:    make([]binModel, 0x300),
 		nibLit: make([]nibModel, 13*81),
 		rolz32: make([]rolzModel, 256),
-		resNib: make([]nibModel, 16*16),
 	}
 	d.r.src = src
-	if len(src) >= 8 {
-		d.r.s0 = uint32(src[0]) | uint32(src[1])<<8 | uint32(src[2])<<16 | uint32(src[3])<<24
-		d.r.s1 = uint32(src[4]) | uint32(src[5])<<8 | uint32(src[6])<<16 | uint32(src[7])<<24
-		d.r.off = 8
-		d.r.end = len(src)
-	}
+	d.r.frames = [][]byte{src}
 	for i := range d.bin {
 		d.bin[i] = 0x8000
 	}
-	d.imgBit = 0x8000
-	d.rawBit = 0x8000
+	for a := 0; a < 8; a++ {
+		for b := 0; b < 8; b++ {
+			d.bin[0x270+a*8+b] = binModel((a + b + 1) * 0x1000)
+		}
+	}
+
 	for i := range d.nibLit {
 		d.nibLit[i].init()
 	}
-	// Token CDF at +0x9ac0 is calloc zeros (0x40d96c). First sym is t15 RawBytes.
-	d.lenNib.init()
+	// The constructor initializes the token CDF uniformly (0x40ca38).
+	d.tok.init()
+	d.mono8.init()
+	d.stereo8.init()
+	d.mono16.init()
+	d.stereo16.init()
+	for i := range d.color {
+		for j := range d.color[i] {
+			for k := range d.color[i][j] {
+				d.color[i][j][k] = uint16(min(k*16384/17, 16384))
+			}
+		}
+	}
+	d.alpha.init()
+	for i := range d.literalRun {
+		d.literalRun[i].init()
+	}
+
 	d.far24.init()
-	for i := range d.farNib {
-		d.farNib[i].init()
+	for i := range d.farLow {
+		d.farLow[i].init()
+		d.farHigh[i].init()
+	}
+	for i := range d.farLen {
+		d.farLen[i].initWeights([]byte{1, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4})
 	}
 	for i := range d.rolz32 {
-		d.rolz32[i].init()
+		initCDF(d.rolz32[i][:], []byte{8, 8, 8, 8, 8, 8, 8, 8, 4, 4, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
 	}
-	for i := range d.rolzLen {
-		d.rolzLen[i].init()
+
+	for i := range d.matchLen {
+		initCDF(d.matchLen[i][:], []byte{1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 8, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1})
 	}
-	for i := range d.resNib {
-		d.resNib[i].init()
-	}
-	for i := range d.imgM {
-		d.imgM[i].init()
-	}
-	d.imgWM.init()
 	for i := range d.stRec {
 		d.stRec[i] = [4]byte{0x80, 0x80, 0x80, 0x80}
 	}
-	d.reps = [4]int{1, 1, 1, 1}
+	// The final constructor pass replaces these uniform CDFs with priors
+	// (0x40ddd1 and 0x40de41), after initializing the other token models.
+	for i := range d.repSlot {
+		d.repSlot[i].initWeights([]byte{64, 1, 1, 1, 8, 8, 8, 8, 4, 4, 1, 1, 1, 1, 1, 1})
+	}
+	for i := range d.repLen {
+		d.repLen[i].initWeights([]byte{1, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4})
+	}
+	for i := range d.u8 {
+		for j := range d.u8[i] {
+			d.u8[i][j].init()
+		}
+	}
+	for i := range d.u16x2 {
+		d.u16x2[i].init()
+	}
+	for i := range d.u16 {
+		d.u16[i].init()
+	}
+	for i := range d.u32 {
+		for j := range d.u32[i] {
+			d.u32[i][j] = uint16(j * 16384 / 31)
+		}
+	}
+	d.reps = [4]int{1, 2, 3, 4}
 	return d
 }
 
@@ -682,14 +649,10 @@ func (d *dec) stepA8(kind int) {
 		a = 13
 	}
 	d.a8 = int(a8Tab[kind][a])
-	d.lastKind = kind
+
 }
 
 func (d *dec) decodeByte() bool {
-	if d.lim > 0 && d.pos >= d.lim {
-		d.why = "delta-span"
-		return false
-	}
 	if !d.r.ok() || d.pos >= cap(d.out) {
 		return false
 	}
@@ -706,16 +669,16 @@ func (d *dec) decodeByte() bool {
 	ps[0] = saNext(ps[0], lit)
 	qs[0] = saNext(qs[0], lit)
 	if lit == 1 {
-		d.nLit++
+
 		if !d.literal() {
 			d.why = "lit"
 			return false
 		}
-		d.note("L")
+
 		d.stepA8(kindLit)
 		return true
 	}
-	d.nMat++
+
 	if !d.match() {
 		if d.why == "" {
 			d.why = "match"
@@ -764,7 +727,7 @@ func (d *dec) literal() bool {
 		if mix <= 0x0f {
 			loIdx = cls*81 + 49 + pcls*16 + int(pred&0xf)
 		} else {
-			loIdx = cls*81 + 1 + int(pred&0xf)
+			loIdx = cls*81 + 1 + hi
 		}
 		if loIdx >= len(d.nibLit) {
 			loIdx = cls * 81
@@ -780,175 +743,104 @@ func (d *dec) literal() bool {
 }
 
 func (d *dec) match() bool {
-	ps := d.prevSlot()
-	qs := d.posSlot()
-	m1 := d.binAt(ps[1], qs[1])
-	b1 := m1.bit(&d.r)
+	ps, qs := d.prevSlot(), d.posSlot()
+	a := d.binAt(ps[1], qs[1]).bit(&d.r)
+	ps[1] = saNext(ps[1], a)
+	qs[1] = saNext(qs[1], a)
+	j := a + 2
+	b := d.binAt(ps[j], qs[j]).bit(&d.r)
+	ps[j] = saNext(ps[j], b)
+	qs[j] = saNext(qs[j], b)
 	if !d.r.ok() {
 		return false
 	}
-	ps[1] = saNext(ps[1], b1)
-	qs[1] = saNext(qs[1], b1)
-	if b1 == 0 {
-		d.note("T")
+	switch 2*a + b {
+	case 0:
 		return d.token()
-	}
-	m2 := d.binAt(ps[3], qs[3])
-	b2 := m2.bit(&d.r)
-	if !d.r.ok() {
-		return false
-	}
-	ps[3] = saNext(ps[3], b2)
-	qs[3] = saNext(qs[3], b2)
-	if b2 == 0 {
-		d.note("R")
+	case 1:
+		return d.repMatch()
+	case 2:
 		return d.rolzMatch()
-	}
-	d.note("F")
-	return d.farMatch()
-}
-
-func (d *dec) note(s string) {
-	if len(d.ev) < 24 {
-		d.ev = append(d.ev, s)
+	default:
+		return d.farMatch()
 	}
 }
 
 func (d *dec) repMatch() bool {
-	slot := d.lenNib.sym(&d.r)
-	if !d.r.ok() {
-		return false
+	slot := d.repSlot[d.a8].sym(&d.r)
+	dist := d.reps[repIdx[slot]] + int(repDelta[slot])
+	k := int(repKind[slot]) ^ 1
+	old := d.reps[k]
+	if k > 1 {
+		d.reps[3] = old
+		d.reps[2] = d.reps[1]
+		old = d.reps[0]
 	}
-	idx := int(repIdx[slot&15])
-	dist := d.reps[idx] + int(repDelta[slot&15])
-	if dist < 1 {
-		dist = 1
+	d.reps[1] = old
+	d.reps[0] = dist
+	ctx := 2 * d.a8
+	if slot != 0 {
+		ctx++
 	}
-	ln := d.lenNib.sym(&d.r)
-	if !d.r.ok() {
-		return false
-	}
-	ok := d.copy(dist, lengthFromSym(&d.r, ln))
+	sym := d.repLen[ctx].sym(&d.r)
+	n := lengthFromSym(&d.r, sym) - 1
+
+	ok := d.copyHistory(dist, n)
 	d.stepA8(kindRep)
-	return ok
+	return ok && d.r.ok()
 }
 
-func (d *dec) rolzMatch() bool {
-	prev := d.prev()
-	slot := d.rolz32[prev].sym(&d.r)
-	if !d.r.ok() {
+func (d *dec) copyHistory(dist, n int) bool {
+	if dist < 1 || dist > d.pos+0xff0 || n < 1 || n > cap(d.out)-d.pos {
+		d.why = "invalid match"
 		return false
 	}
-	if slot < 0 {
-		slot = 0
-	}
-	if slot > 31 {
-		slot = 31
-	}
-	off := rolzBase[slot]
-	if e := int(rolzExtra[slot]); e > 0 {
-		off += int(d.r.bits(e))
-	}
-	list := d.rolz[prev]
-	if len(list) == 0 {
-		// PE empty list does not emit the slot (0x18) and does not
-		// run dest[pos-1]. Consume the length extra bits; write nothing.
-		ln := d.rolzLen[0].sym(&d.r)
-		if !d.r.ok() {
-			return false
+	for i := 0; i < n; i++ {
+		var b byte
+		if d.pos >= dist {
+			b = d.out[d.pos-dist]
 		}
-		_ = lengthFromSym(&d.r, ln)
-		d.stepA8(kindRolz)
-		return true
+		d.emit(b)
 	}
-	idx := off
-	if idx >= len(list) {
-		idx %= len(list)
-	}
-	srcPos := list[len(list)-1-idx]
-	dist := d.pos - srcPos
-	if dist < 1 {
-		dist = 1
-	}
-	ln := d.rolzLen[0].sym(&d.r)
-	if !d.r.ok() {
-		return false
-	}
-	ok := d.copy(dist, lengthFromSym(&d.r, ln))
-	d.stepA8(kindRolz)
-	return ok
+	return true
 }
 
 func (d *dec) farMatch() bool {
-	hi := d.far24.sym(&d.r)
-	if !d.r.ok() {
-		return false
+	slot := d.far24.sym(&d.r)
+	low := d.farLow[slot].sym(&d.r)
+	high := d.farHigh[slot].sym(&d.r)
+	v := uint32(high) << uint(slot)
+	if slot != 0 {
+		v |= d.r.bits(slot)
 	}
-	if hi < 0 {
-		hi = 0
+	dist := farBase[slot] + 1 + low + int(v<<4)
+	d.reps = [4]int{dist, d.reps[0], d.reps[1], d.reps[2]}
+	log := 0
+	for n := dist; n > 1; n >>= 1 {
+		log++
 	}
-	if hi > 26 {
-		hi = 26
-	}
-	// 0x402c93 loads 0x42c140 → extra 0x42b780 (extra[i]=i).
-	// 0x402cad: lea eax, [extra-8] — nibbles only when extra>=8.
-	ex := int(rolzExtra[hi])
-	dist := rolzBase[hi] + 1
-	if ex >= 8 {
-		mid := d.farNib[0].sym(&d.r)
-		if !d.r.ok() {
-			return false
-		}
-		lo := d.farNib[1].sym(&d.r)
-		if !d.r.ok() {
-			return false
-		}
-		extra := uint32(mid)<<4 | uint32(lo)
-		if ex > 8 {
-			extra |= d.r.bits(ex-8) << 8
-		}
-		dist += int(extra)
-	} else if ex > 0 {
-		dist += int(d.r.bits(ex))
-	}
-	if dist < 1 {
-		dist = 1
-	}
-	ln := d.lenNib.sym(&d.r)
-	if !d.r.ok() {
-		return false
-	}
-	n := lengthFromSym(&d.r, ln)
-	if len(d.ev) < 24 {
-		d.note("Fd" + itoa(dist) + "n" + itoa(n))
-	}
-	ok := d.copy(dist, n)
-	if !ok {
-		d.why = "far d=" + itoa(dist) + " n=" + itoa(n) + " p=" + itoa(d.pos)
+	sym := d.farLen[d.a8*4+log/8].sym(&d.r)
+	widths := [...]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6}
+	n := lengthFromExtra(&d.r, widths[:], sym)
+
+	start := d.pos
+	ok := d.copyHistory(dist, n)
+	if ok {
+		d.recordMatch(start, n)
+		d.recordMatch(start+1, n-1)
 	}
 	d.stepA8(kindFar)
-	return ok
-}
-
-func (d *dec) repMatchFallback(slot int) bool {
-	idx := int(repIdx[slot&15])
-	dist := d.reps[idx] + int(repDelta[slot&15])
-	if dist < 1 {
-		dist = 1
-	}
-	return d.copy(dist, 2+int(repKind[slot&15]))
+	return ok && d.r.ok()
 }
 
 func (d *dec) token() bool {
-	d.nTok++
+
 	t := d.tok.sym(&d.r)
 	if !d.r.ok() {
 		d.why = "tok-sym"
 		return false
 	}
-	if len(d.ev) <= 24 {
-		d.note("t" + itoa(t))
-	}
+
 	ok := false
 	switch t {
 	case tokDelta1xU8:
@@ -960,25 +852,26 @@ func (d *dec) token() bool {
 	case tokDelta4xU8:
 		ok = d.tokDeltaU8(4)
 	case tokDelta1xU16:
-		ok = d.tokDeltaUN(2, 1)
+		ok = d.delta16()
 	case tokDelta2xU16:
-		ok = d.tokDeltaUN(2, 2)
+		ok = d.delta16x2()
 	case tokDelta1xU32:
-		ok = d.tokDeltaUN(4, 1)
+		ok = d.delta32()
 	case tokRGB:
 		ok = d.tokRGB(3)
 	case tokRGBA:
 		ok = d.tokRGB(4)
 	case tokImagePred:
-		ok = d.tokImage()
+		d.why = "unsupported image predictor token"
+		return false
 	case tokMono8:
-		ok = d.tokAudio(1, 1)
+		ok = d.audioPCM8(1)
 	case tokStereo8:
-		ok = d.tokAudio(2, 1)
+		ok = d.audioPCM8(2)
 	case tokMono16:
-		ok = d.tokAudio(1, 2)
+		ok = d.audioPCM16(1)
 	case tokStereo16:
-		ok = d.tokAudio(2, 2)
+		ok = d.audioPCM16(2)
 	case tokLiterals32:
 		ok = d.tokLit32()
 	case tokRawBytes:
@@ -990,131 +883,66 @@ func (d *dec) token() bool {
 	if ok {
 		d.stepA8(kindTok)
 	}
-	return ok
-}
-
-func (d *dec) tokLen() int {
-	n := lengthFromSym(&d.r, d.lenNib.sym(&d.r))
-	if n > 1<<20-d.pos {
-		n = 1<<20 - d.pos
-	}
-	if n < 1 {
-		n = 1
-	}
-	return n
-}
-
-func (d *dec) resByte(ctx int) byte {
-	if ctx < 0 {
-		ctx = 0
-	}
-	ctx &= 15
-	// Encode.su 3281: values are simply subtracted (uint8 wrap).
-	// PE 0x42b740: extra 0,0,1,..6,6,..1,0,0 — 0 and 255 are extra-0.
-	if d.altRes == 1 {
-		hi := d.resNib[ctx].sym(&d.r)
-		lo := d.resNib[ctx].sym(&d.r)
-		return byte(hi<<4 | lo)
-	}
-	sym := d.resNib[ctx].sym(&d.r)
-	if sym < 0 {
-		sym = 0
-	}
-	if sym > 15 {
-		sym = 15
-	}
-	// 0x42b740: extra 0,0,1,2,3,4,5,6,6,5,4,3,2,1,0,0 (uint8 wrap, bias 0).
-	v := resBase16[sym]
-	if e := int(resExtra16[sym]); e > 0 {
-		v += int(d.r.bits(e))
-	}
-	return byte(v - resBias16)
+	return ok && !d.overflow
 }
 
 func (d *dec) tokDeltaU8(step int) bool {
-	// Encode 0x40aab2 walks 8 position-context slots (0xf617..0xf60f).
 	n := 8
-	if step > 1 {
-		n = 8 * step
+	if step == 3 {
+		n = 9
 	}
 	for i := 0; i < n; i++ {
-		pred := byte(0)
-		if d.pos >= step {
-			pred = d.out[d.pos-step]
+		prev := byte(d.wordBefore(1, step))
+		sign := (prev - byte(d.wordBefore(1, 2*step))) >> 7
+		ctx := 2*((n-1-i)%step) + int(sign)
+		sym := d.u8[step-1][ctx].sym(&d.r)
+		v := resBase16[sym]
+		if e := resExtra16[sym]; e != 0 {
+			v += int(d.r.bits(int(e)))
 		}
-		// Missing prev-Δ uses the PE 0x40d568 seed 0xffff8000 → sign 1.
-		sign := 1
-		if d.pos >= 2*step {
-			if int(d.out[d.pos-step]) >= int(d.out[d.pos-2*step]) {
-				sign = 0
-			}
-		}
-		ctx := (d.pos%step)*2 + sign
-		res := d.resByte(ctx)
-		d.lastRes[d.pos&3] = int(int8(res))
-		d.emit(pred + res)
-		if !d.r.ok() {
-			d.why = "tok-d8"
-			return false
-		}
+		d.emit(prev + byte(v))
 	}
-	return true
-}
-
-func (d *dec) tokDeltaUN(width, stride int) bool {
-	step := width * stride
-	n := d.tokLen()
-	if n%width != 0 {
-		n += width - n%width
-	}
-	for i := 0; i < n; i++ {
-		ch := i % width
-		pred := byte(0)
-		src := d.pos - step
-		if src >= 0 {
-			pred = d.out[src]
-		}
-		sign := 1
-		if src >= step {
-			if int(d.out[src]) >= int(d.out[src-step]) {
-				sign = 0
-			}
-		}
-		ctx := ch*2 + sign
-		res := d.resByte(ctx)
-		d.emit(pred + res)
-		if !d.r.ok() {
-			d.why = "tok-dn"
-			return false
-		}
-	}
-	return true
+	return d.r.ok()
 }
 
 func (d *dec) tokRGB(ch int) bool {
-	n := d.tokLen()
-	if n%ch != 0 {
-		n += ch - n%ch
+	// rz 1.00: 0x40404f / 0x404363. Three RGB or two RGBA pixels.
+	widths := [2][17]byte{
+		{7, 6, 5, 4, 3, 2, 1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7},
+		{8, 7, 6, 5, 4, 3, 2, 1, 0, 1, 2, 3, 4, 5, 6, 7, 8},
 	}
-	for i := 0; i < n; i++ {
-		c := i % ch
-		pred := byte(0)
-		if d.pos >= ch {
-			pred = d.out[d.pos-ch]
+	for i := 0; i < 12-ch; i += ch {
+		var v [3]int
+		for c := range v {
+			w := widths[min(c, 1)]
+			sym := decodeCDF(&d.r, d.color[ch-3][c][:], 17)
+			v[c] = -255
+			if c != 0 {
+				v[c] = -510
+			}
+			for j := 0; j < sym; j++ {
+				v[c] += 1 << w[j]
+			}
+			if w[sym] != 0 {
+				v[c] += int(d.r.bits(int(w[sym])))
+			}
 		}
-		// 0x40af88: per-channel Δ plus half-neighbour mix on G/B.
-		if c > 0 && d.pos >= 1 {
-			mix := int(int8(d.out[d.pos-1] - pred))
-			pred += byte(mix / 2)
+		g := v[0] - (v[2] >> 1)
+		b := g - (v[1] >> 1)
+		delta := [3]int{b + v[1], g + v[2], b}
+		for _, v := range delta {
+			d.emit(byte(d.wordBefore(1, ch)) + byte(v))
 		}
-		res := d.resByte(c)
-		d.emit(pred + res)
-		if !d.r.ok() {
-			d.why = "tok-rgb"
-			return false
+		if ch == 4 {
+			s := d.alpha.sym(&d.r)
+			v := resBase16[s]
+			if resExtra16[s] != 0 {
+				v += int(d.r.bits(int(resExtra16[s])))
+			}
+			d.emit(byte(d.wordBefore(1, ch)) + byte(v))
 		}
 	}
-	return true
+	return d.r.ok()
 }
 
 func unzig(v int) int {
@@ -1125,352 +953,36 @@ func unzig(v int) int {
 	return ^(v >> 1)
 }
 
-func (d *dec) imgU(m *imgModel) int {
-	// 0x41f7fc / 0x404aa9: 20-sym extra 0x42b720. edx=16 caps extra.
-	// Unsigned; zigzag is the pixel step at 0x404af7, not the width return.
-	sym := m.sym(&d.r)
-	if sym < 0 {
-		sym = 0
-	}
-	if sym >= imgSyms {
-		sym = imgSyms - 1
-	}
-	v := imgBase20[sym]
-	if e := int(imgExtra20[sym]); e > 0 {
-		if e > 16 {
-			e = 16
-		}
-		v += int(d.r.bits(e))
-	}
-	return v
-}
-
-func (d *dec) imgRes(ch int) int {
-	// 0x4047ca r13=0x42c150 → 0x4315c0 extra 0x42b720, n=20.
-	// Rice: G 0xffd0, R 0x102e0, B 0x105f0. First residual rice=0.
-	if ch < 0 {
-		ch = 0
-	}
-	ch %= 3
-	v := d.imgU(&d.imgM[ch])
-	r := d.imgRice[ch]
-	if r > 16 {
-		r = 16
-	}
-	if r != 0 {
-		// 0x4081c0: value = (value << rice) | bits(rice)
-		v = v<<r | int(d.r.bits(r))
-	}
-	if v > 2<<r {
-		// 0x404ae0 cmp 2<<rice, value; jae stay; else rice++
-		d.imgRice[ch] = r + 1
-	} else if v < 1<<r {
-		// 0x408170: rice -= (rice+31)>>5
-		d.imgRice[ch] = r - (r+31)>>5
-	}
-	return unzig(v)
-}
-
-func (d *dec) imgCh(ch, row int) byte {
-	// West is previous pixel same channel (0x4047f2 −3). First row: west only.
-	var west, north, nw byte
-	src := d.pos + ch - 3
-	if src >= 0 && src < d.pos {
-		west = d.out[src]
-	}
-	if ni := d.pos + ch - row; ni >= 0 && ni < d.pos {
-		north = d.out[ni]
-	}
-	if nwi := d.pos + ch - row - 3; nwi >= 0 && nwi < d.pos {
-		nw = d.out[nwi]
-	}
-	pred := west
-	if d.pos >= row {
-		p := int(west) + int(north) - int(nw)
-		pw := absInt(p - int(west))
-		pn := absInt(p - int(north))
-		pnw := absInt(p - int(nw))
-		pred = nw
-		if pw <= pn && pw <= pnw {
-			pred = west
-		} else if pn <= pnw {
-			pred = north
-		}
-	}
-	return pred + byte(d.imgRes(ch))
-}
-
-func (d *dec) tokImage() bool {
-	// 0x404752: binary +0x10fb0 (adapt >>5). Bit 1: 0x41f7fc edx=16
-	// is the 0x4315c0 20-sym integer (imul $0x310), not RawBytes bits(16).
-	// One token writes 12 bytes (0x404826 lea 0xc(%rsi); 0x408306 addl $0xc).
-	if d.imgBit.bitSh(&d.r, 5) == 1 {
-		w := d.imgU(&d.imgWM)
-		if w > 0 {
-			d.imgW = w
-		}
-	}
-	nbyte := 12
-	if d.altImg == 1 {
-		nbyte = 8
-	}
-	if nbyte > 1<<20-d.pos {
-		nbyte = 1<<20 - d.pos
-	}
-	row := d.imgW
-	if row < 1 {
-		row = nbyte
-	}
-	for i := 0; i+3 <= nbyte; i += 3 {
-		// Stores: 0x404b9d G at +1, 0x404e1e R at +0, 0x4050ad B at +2.
-		g := d.imgCh(1, row)
-		r := d.imgCh(0, row)
-		b := d.imgCh(2, row)
-		if !d.r.ok() {
-			d.why = "tok-img"
-			return false
-		}
-		d.emit(r)
-		d.emit(g)
-		d.emit(b)
-	}
-	return true
-}
-
-func absInt(x int) int {
-	if x < 0 {
-		return -x
-	}
-	return x
-}
-
-func itoa(n int) string {
-	if n < 0 {
-		return "-" + itoa(-n)
-	}
-	if n < 10 {
-		return string(rune('0' + n))
-	}
-	return itoa(n/10) + string(rune('0'+n%10))
-}
-
-func (d *dec) tokAudio(ch, width int) bool {
-	step := ch * width
-	n := d.tokLen()
-	if n%width != 0 {
-		n += width - n%width
-	}
-	for i := 0; i < n; i++ {
-		c := i % step
-		// Order-2: 2*prev - prev2 on the same channel.
-		var pred byte
-		if d.pos >= step {
-			p1 := int(d.out[d.pos-step])
-			p2 := p1
-			if d.pos >= 2*step {
-				p2 = int(d.out[d.pos-2*step])
-			}
-			v := 2*p1 - p2
-			if v < 0 {
-				v = 0
-			}
-			if v > 255 {
-				v = 255
-			}
-			pred = byte(v)
-		}
-		res := d.resByte(c & 15)
-		d.emit(pred + res)
-		if !d.r.ok() {
-			d.why = "tok-au"
-			return false
-		}
-	}
-	return true
-}
-
 func (d *dec) tokLit32() bool {
-	return d.tokRaw()
-}
-
-func (d *dec) rawSwapNoRefill() uint16 {
-	d.r.s0, d.r.s1 = d.r.s1, d.r.s0
-	if !d.r.ok() {
-		return 0
+	start := max(d.literalRunEnd, d.pos-256)
+	for _, b := range d.out[start:d.pos] {
+		d.literalRun[0].adapt(int(b >> 4))
+		d.literalRun[1+int(b>>4)].adapt(int(b & 15))
 	}
-	v := uint16(d.r.s0 & 0xffff)
-	d.r.s0 >>= 16
-	return v
+	for i := 0; i < 32; i++ {
+		hi := d.literalRun[0].sym(&d.r)
+		lo := d.literalRun[1+hi].sym(&d.r)
+		d.emit(byte(hi<<4 | lo))
+	}
+	d.literalRunEnd = d.pos
+	return d.r.ok()
 }
 
 func (d *dec) tokRaw() bool {
-	// Decode RawBytes 0x406fc2 / 0x40a8ae: 16× store ax, pos += 0x20.
-	// First t15: s0 leftover is the Delta header (fg-05: 0x00017df1).
-	// Four no-swap extracts write dest[0:8] and drain s0. Mid-token
-	// refill of packed[8:] is memcpy32 — stop after the header so
-	// dest[8:] comes from the lit/match/token kernel; s1 stays live.
-	// Later t15: 32 bytes from the literal kernel, not raw s0.
-	if d.pos == 0 {
-		d.rawN = 0
-		for i := 0; i < 4; i++ {
-			w := d.rawU16()
-			d.rawN++
-			if !d.r.ok() {
-				d.why = "tok-raw"
-				return false
-			}
-			d.emit(byte(w))
-			d.emit(byte(w >> 8))
-		}
-		// dest[8:12] is DisPack CHUNK_SIZE (16KiB). dest[12:] from
-		// the lit/match kernel after a normal rANS swap.
-		if d.pos == 8 && !d.noChunk {
-			n := uint32(16 << 10)
-			d.emit(byte(n))
-			d.emit(byte(n >> 8))
-			d.emit(byte(n >> 16))
-			d.emit(byte(n >> 24))
-		}
-		return true
+	for i := 0; i < 16; i++ {
+		v := d.r.bits(16)
+		d.emit(byte(v))
+		d.emit(byte(v >> 8))
 	}
-	for i := 0; i < 32; i++ {
-		if !d.literal() {
-			d.why = "tok-raw"
-			return false
-		}
-	}
-	return true
-}
-
-func (d *dec) renormS0() {
-	// After two 16-bit extracts from s0=0x00017df1, s0==0.
-	// Refill only when empty. s0==1 is the high half of dataSize
-	// (dest u16 0x0001); treating <=0xffff as dry overwrites it.
-	for k := 0; k < 2 && d.r.ok() && d.r.s0 == 0; k++ {
-		d.r.refill()
-	}
-}
-
-func (d *dec) rawU16() uint16 {
-	switch d.altRaw {
-	case rawFirstNS:
-		if d.rawN == 0 {
-			if !d.r.ok() {
-				return 0
-			}
-			v := uint16(d.r.s0 & 0xffff)
-			d.r.s0 >>= 16
-			return v
-		}
-		return uint16(d.r.bits(16))
-	case rawBits16:
-		return uint16(d.r.bits(16))
-	case rawBinLSB, rawBinMSB:
-		var w uint16
-		for b := uint(0); b < 16; b++ {
-			if d.rawBit.bit(&d.r) == 1 {
-				if d.altRaw == rawBinMSB {
-					w = w<<1 | 1
-				} else {
-					w |= 1 << b
-				}
-			} else if d.altRaw == rawBinMSB {
-				w <<= 1
-			}
-		}
-		return w
-	case rawImgU:
-		return uint16(d.imgU(&d.imgWM))
-	case rawNib:
-		hi := d.resNib[0].sym(&d.r)
-		lo := d.resNib[0].sym(&d.r)
-		return uint16(hi<<4 | lo)
-	default:
-		// rawNoSwap: take s0&0xffff, s0>>=16, no pre-swap.
-		// First t15 writes only the leftover (dest[0:8]). Do not
-		// refill s0 from packed here — that memcpy's the rANS
-		// stream into dest. Later u16s of a later t15 stay 0
-		// if s0 is dry; the main loop's models refill via swap.
-		if !d.r.ok() {
-			return 0
-		}
-		v := uint16(d.r.s0 & 0xffff)
-		d.r.s0 >>= 16
-		return v
-	}
+	return d.r.ok()
 }
 
 func (d *dec) emit(b byte) {
-	prev := d.prev()
+	if d.pos >= cap(d.out) {
+		d.why = "output limit"
+		d.overflow = true
+		return
+	}
 	d.out = append(d.out, b)
-	if d.pos < 1<<20 {
-		d.rolz[prev] = append(d.rolz[prev], d.pos)
-		if len(d.rolz[prev]) > rolzHist {
-			d.rolz[prev] = d.rolz[prev][len(d.rolz[prev])-rolzHist:]
-		}
-	}
 	d.pos++
-	// rzw dest is one Delta solid. Once the first 8 bytes parse as
-	// a PE-legal header (ds in 1k..2M, ts%4==0), dest is exactly
-	// 8+3*ts+ds. Hitting the 1MiB cap means the kernel did not stop.
-	if d.lim == 0 && d.pos == 8 {
-		ds := uint32(d.out[0]) | uint32(d.out[1])<<8 | uint32(d.out[2])<<16 | uint32(d.out[3])<<24
-		ts := uint32(d.out[4]) | uint32(d.out[5])<<8 | uint32(d.out[6])<<16 | uint32(d.out[7])<<24
-		if ds >= 1024 && ds <= 2<<20 && ts < 0x7fffffff && ts%4 == 0 {
-			d.lim = 8 + 3*int(ts) + int(ds)
-		}
-	}
-}
-
-func (d *dec) copy(dist, n int) bool {
-	if n < 1 || d.pos < 1 {
-		return false
-	}
-	// Far/ROLZ can decode dist > pos while history is still short.
-	// Fold into the window instead of aborting the solid (was 425 bytes).
-	if dist < 1 {
-		dist = 1
-	}
-	if dist > d.pos {
-		// Still fold: mixed tokens grow history but far can exceed pos.
-		dist = (dist-1)%d.pos + 1
-	}
-	d.reps[3] = d.reps[2]
-	d.reps[2] = d.reps[1]
-	d.reps[1] = d.reps[0]
-	d.reps[0] = dist
-	for i := 0; i < n; i++ {
-		src := d.pos - dist
-		if src < 0 || src >= len(d.out) {
-			return false
-		}
-		d.emit(d.out[src])
-		if d.pos >= cap(d.out) || (d.lim > 0 && d.pos >= d.lim) {
-			return d.lim > 0 && d.pos >= d.lim
-		}
-	}
-	return true
-}
-
-func decodeNative(src []byte, dcap int) ([]byte, error) {
-	if len(src) < 8 || dcap <= 0 {
-		return nil, errCodec
-	}
-	d := newDec(src, dcap)
-	maxOut := len(src) * 16
-	if maxOut > dcap {
-		maxOut = dcap
-	}
-	for d.pos < maxOut {
-		if !d.decodeByte() {
-			break
-		}
-	}
-	if d.lim > 0 && len(d.out) > d.lim {
-		d.out = d.out[:d.lim]
-	}
-	if len(d.out) == 0 {
-		return nil, errCodec
-	}
-	return d.out, nil
 }

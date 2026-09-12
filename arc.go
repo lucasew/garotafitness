@@ -2,6 +2,7 @@ package garotafitness
 
 import (
 	"fmt"
+	"hash/crc32"
 	"io"
 	"path"
 	"strings"
@@ -18,6 +19,7 @@ type Member struct {
 	CompSize uint64
 	CRC      uint32
 	Dir      bool
+	crcTable *crc32.Table
 }
 
 func parseVolume(name string, data []byte) (Volume, error) {
@@ -43,6 +45,9 @@ func parseVolume(name string, data []byte) (Volume, error) {
 	if err != nil {
 		return Volume{}, fmt.Errorf("%s footer lzma: %w", name, err)
 	}
+	if crc32.Checksum(footer, loc.table) != loc.crc {
+		return Volume{}, fmt.Errorf("%s: footer CRC mismatch", name)
+	}
 	blocks, err := parseControl(footer, fpos)
 	if err != nil {
 		return Volume{}, fmt.Errorf("%s control: %w", name, err)
@@ -50,6 +55,7 @@ func parseVolume(name string, data []byte) (Volume, error) {
 	var members []Member
 	var pipes []Pipeline
 	for _, b := range blocks {
+		b.table = loc.table
 		pipes = append(pipes, b.pipe)
 		if b.kind != BlockDir {
 			continue
@@ -72,19 +78,22 @@ func parseVolume(name string, data []byte) (Volume, error) {
 }
 
 type localDesc struct {
-	kind BlockKind
-	pipe Pipeline
-	orig uint64
-	csz  uint64
-	crc  uint32
+	kind  BlockKind
+	pipe  Pipeline
+	orig  uint64
+	csz   uint64
+	crc   uint32
+	table *crc32.Table
 }
 
 type ctrlBlock struct {
-	kind BlockKind
-	pipe Pipeline
-	pos  int64
-	orig uint64
-	csz  uint64
+	kind  BlockKind
+	pipe  Pipeline
+	pos   int64
+	orig  uint64
+	csz   uint64
+	crc   uint32
+	table *crc32.Table
 }
 
 func mergeAlgos(ps ...Pipeline) []Algo {
@@ -142,11 +151,20 @@ func parseLocal(chunk []byte) (localDesc, error) {
 	if err != nil {
 		return localDesc{}, err
 	}
-	crc, _, err := readU32(chunk, i)
+	crc, i, err := readU32(chunk, i)
 	if err != nil {
 		return localDesc{}, err
 	}
-	return localDesc{kind: blockKind(int(typ)), pipe: ParsePipeline(comp), orig: orig, csz: csz, crc: crc}, nil
+	want, _, err := readU32(chunk, i)
+	if err != nil {
+		return localDesc{}, err
+	}
+	for _, table := range []*crc32.Table{crc32.IEEETable, fitgirlCRCTable} {
+		if crc32.Checksum(chunk[:i], table) == want {
+			return localDesc{kind: blockKind(int(typ)), pipe: ParsePipeline(comp), orig: orig, csz: csz, crc: crc, table: table}, nil
+		}
+	}
+	return localDesc{}, fmt.Errorf("descriptor CRC mismatch")
 }
 
 func parseControl(footer []byte, footerPos int64) ([]ctrlBlock, error) {
@@ -176,7 +194,7 @@ func parseControl(footer []byte, footerPos int64) ([]ctrlBlock, error) {
 		if err != nil {
 			return nil, err
 		}
-		_, j, err = readU32(footer, j)
+		crc, j, err := readU32(footer, j)
 		if err != nil {
 			return nil, err
 		}
@@ -186,6 +204,7 @@ func parseControl(footer []byte, footerPos int64) ([]ctrlBlock, error) {
 			pos:  footerPos - int64(rel),
 			orig: orig,
 			csz:  csz,
+			crc:  crc,
 		})
 		i = j
 	}
@@ -199,6 +218,9 @@ func parseDir(data []byte, b ctrlBlock) ([]Member, error) {
 	raw, err := rawLZMA1(data[b.pos:int(b.pos)+int(b.csz)], int(b.orig))
 	if err != nil {
 		return nil, err
+	}
+	if b.table == nil || crc32.Checksum(raw, b.table) != b.crc {
+		return nil, fmt.Errorf("directory CRC mismatch")
 	}
 	nb, i, err := readPacked(raw, 0)
 	if err != nil {
@@ -324,6 +346,7 @@ func parseDir(data []byte, b ctrlBlock) ([]Member, error) {
 				CompSize: cszs[bi],
 				CRC:      crcs[idx],
 				Dir:      isdir[idx] != 0,
+				crcTable: b.table,
 			})
 			idx++
 		}
