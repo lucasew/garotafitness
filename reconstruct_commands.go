@@ -128,6 +128,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 	}
 	name := strings.ToLower(path.Base(strings.ReplaceAll(w[0], "\\", "/")))
 	a := w[1:]
+	slog.Info("recipe command", "program", name, "args", a, "cwd", cwd)
 	resolve := func(s string) (string, error) { return virtualPath(s, cwd) }
 	read := func(s string) ([]byte, error) {
 		n, e := resolve(s)

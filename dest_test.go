@@ -4,55 +4,37 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestMemberPathRejectsEscape(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	for _, name := range []string{"../x", "/etc/passwd", ""} {
-		if _, err := memberPath(root, name); err == nil {
-			t.Fatalf("accepted %q", name)
-		}
+		_, err := memberPath(root, name)
+		require.Error(t, err, "accepted %q", name)
 	}
 }
 
 func TestDirDestCreateAndOverwrite(t *testing.T) {
 	t.Parallel()
 	d, err := OpenDirDest(filepath.Join(t.TempDir(), "out"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	w, err := d.Create("a/b.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.WriteString(w, "one"); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	_, err = io.WriteString(w, "one")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
 	w, err = d.Create("a/b.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := io.WriteString(w, "two"); err != nil {
-		t.Fatal(err)
-	}
-	if err := w.Close(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	_, err = io.WriteString(w, "two")
+	require.NoError(t, err)
+	require.NoError(t, w.Close())
 	got, err := os.ReadFile(filepath.Join(d.Root, "a", "b.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(got) != "two" {
-		t.Fatalf("got %q", got)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "two", string(got))
 	_, err = d.Create("../escape")
-	if err == nil || !strings.Contains(err.Error(), "leaves dest") {
-		t.Fatalf("got %v", err)
-	}
+	require.ErrorContains(t, err, "leaves dest")
 }

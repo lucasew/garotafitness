@@ -35,14 +35,19 @@ func (e Extractor) Extract(ctx context.Context) error {
 	} else if len(setup.Encoders) > 0 {
 		slog.Info("setup encoders", "names", setup.Encoders)
 	}
+	if n := len(setup.Operations); n > 0 {
+		slog.Info("setup reconstruction records", "count", n)
+	}
 	vols, err := listVolumes(e.Source)
 	if err != nil {
 		return err
 	}
+	slog.Info("volumes", "count", len(vols))
 	if err := verifyChecksums(e.Source, vols); err != nil {
 		return err
 	}
 	if setup.InstalledMD5 != "" || len(setup.Operations) != 0 {
+		slog.Info("reconstruct from setup metadata")
 		return e.extractReconstructed(ctx, vols, setup)
 	}
 	for _, v := range vols {
@@ -86,6 +91,7 @@ func extractVolume(ctx context.Context, e Extractor, v Volume) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", v.Name, err)
 	}
+	slog.Info("read volume", "name", v.Name, "bytes", len(data))
 	return extractVolumeData(ctx, e, v.Name, data)
 }
 
@@ -155,6 +161,7 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 	if len(s.pipe) == 0 {
 		return unknownEncoderError(Atom{})
 	}
+	slog.Info("decode solid", "pipeline", s.pipe.String(), "offset", s.off, "compressed", s.csz, "members", len(s.files))
 	end := s.off + int64(s.csz)
 	if s.off < 0 || end > int64(len(data)) {
 		return fmt.Errorf("solid span")
@@ -215,5 +222,6 @@ func writeMember(dst Dest, m Member, r io.Reader) error {
 	if (m.crcTable != nil || m.CRC != 0) && h.Sum32() != m.CRC {
 		return fmt.Errorf("write %s: crc %08x want %08x", m.Path, h.Sum32(), m.CRC)
 	}
+	slog.Debug("wrote member", "path", m.Path, "size", n, "crc", fmt.Sprintf("%08x", h.Sum32()))
 	return nil
 }

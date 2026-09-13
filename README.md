@@ -7,6 +7,10 @@ go build -o bin/garotafitness ./cmd/garotafitness
 bin/garotafitness extract '/path/to/repack' /path/to/output
 ```
 
+`-v` raises slog detail (volumes, reconstruction records, recipe commands;
+`-vv` includes each written member). `--help` and `--version` come from
+lewkit `x/cmd`.
+
 Keep `setup.exe`, the required `fg-*.bin` volumes, and `MD5/fitgirl-bins.md5`
 together in the source directory. The optional soundtrack volume is extracted
 when present. `setup.exe` supplies metadata and the installed-file checksum

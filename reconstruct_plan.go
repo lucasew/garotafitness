@@ -253,6 +253,7 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		slog.Info("reconstruction operation", "index", i+1, "kind", op.Kind, "source", op.Source, "dest", op.Dest, "program", op.Program, "workdir", op.WorkDir)
 		var err error
 		switch op.Kind {
 		case "extract":

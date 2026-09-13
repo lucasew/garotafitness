@@ -48,7 +48,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 
 | TEC | Tool | Relation | We do not | Cite |
 |-----|------|----------|-----------|------|
-| TEC-01 | `flag` plus argv | adopt | write a command framework | stdlib:flag |
+| TEC-01 | lewkit `x/cmd` | adopt | write cobra or hand-rolled flag parsing | github.com/lewtec/lewkit/x/cmd |
 | TEC-02 | `io/fs.FS` for Source. Dest write port (Create, MkdirAll) | implement Dest | treat Dest as `fs.FS` | stdlib:io/fs (read-only; Dest write is a cited miss) |
 | TEC-03 | `log/slog` | adopt | a second logger | stdlib:log/slog |
 | TEC-04 | Volume method strings. `setup.exe` token scan | implement | run Inno Pascal, ISDone, or CLS | none (no Go Inno 5.5 library; `innoextract-go` is 6.x only) |

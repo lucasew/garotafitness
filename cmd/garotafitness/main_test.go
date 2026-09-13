@@ -1,22 +1,25 @@
 package main
 
-import "testing"
+import (
+	"testing"
 
-func TestParseArgs(t *testing.T) {
+	"github.com/lewtec/lewkit/x/cmd"
+	"github.com/stretchr/testify/require"
+)
+
+func TestParseExtract(t *testing.T) {
 	t.Parallel()
-	_, _, err := parseArgs(nil)
-	if err == nil {
-		t.Fatal("want error for empty argv")
-	}
-	_, _, err = parseArgs([]string{"extract", "only"})
-	if err == nil {
-		t.Fatal("want error for one operand")
-	}
-	src, dst, err := parseArgs([]string{"extract", "/src", "/dst"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if src != "/src" || dst != "/dst" {
-		t.Fatalf("got %q %q", src, dst)
-	}
+	_, err := cmd.Parse[cmd.App[root]]()
+	require.NoError(t, err)
+
+	app, err := cmd.Parse[cmd.App[root]]("extract")
+	require.NoError(t, err)
+	require.NotNil(t, app.Args.Extract)
+	require.Error(t, app.Args.Extract.Run(t.Context()))
+
+	app, err = cmd.Parse[cmd.App[root]]("extract", "/src", "/dst")
+	require.NoError(t, err)
+	require.NotNil(t, app.Args.Extract)
+	require.Equal(t, "/src", app.Args.Extract.Source.Value())
+	require.Equal(t, "/dst", app.Args.Extract.Dest.Value())
 }

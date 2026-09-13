@@ -102,10 +102,12 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 		if err != nil {
 			return err
 		}
+		slog.Info("verify installed checksums", "manifest", manifestPath)
 		if err := s.verifyInstalled(ctx, string(manifest), path.Dir(manifestPath)); err != nil {
 			return err
 		}
 	}
+	slog.Info("write reconstructed tree", "dirs", len(s.dirs), "files", len(s.files))
 	for _, name := range sortedKeys(s.dirs) {
 		if err := e.Dest.MkdirAll(name, s.dirs[name]); err != nil {
 			return err
