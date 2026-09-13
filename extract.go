@@ -29,10 +29,11 @@ func (e Extractor) Extract(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if names, err := scanSetup(e.Source); err != nil {
+	setup, setupErr := readSetup(e.Source)
+	if err := setupErr; err != nil {
 		slog.Info("setup.exe", "err", err)
-	} else if len(names) > 0 {
-		slog.Info("setup encoders", "names", names)
+	} else if len(setup.Encoders) > 0 {
+		slog.Info("setup encoders", "names", setup.Encoders)
 	}
 	vols, err := listVolumes(e.Source)
 	if err != nil {
@@ -40,6 +41,9 @@ func (e Extractor) Extract(ctx context.Context) error {
 	}
 	if err := verifyChecksums(e.Source, vols); err != nil {
 		return err
+	}
+	if setup.InstalledMD5 != "" {
+		return e.extractReconstructed(ctx, vols, setup.InstalledMD5)
 	}
 	for _, v := range vols {
 		if err := ctx.Err(); err != nil {
@@ -53,19 +57,20 @@ func (e Extractor) Extract(ctx context.Context) error {
 }
 
 func scanSetup(src fs.FS) ([]string, error) {
+	info, err := readSetup(src)
+	return info.Encoders, err
+}
+
+func readSetup(src fs.FS) (setupdata.Info, error) {
 	f, err := src.Open("setup.exe")
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, nil
+			return setupdata.Info{}, nil
 		}
-		return nil, err
+		return setupdata.Info{}, err
 	}
 	defer f.Close()
-	info, err := setupdata.Scan(f)
-	if err != nil {
-		return nil, err
-	}
-	return info.Encoders, nil
+	return setupdata.Scan(f)
 }
 
 func extractVolume(ctx context.Context, e Extractor, v Volume) error {
@@ -81,7 +86,11 @@ func extractVolume(ctx context.Context, e Extractor, v Volume) error {
 	if err != nil {
 		return fmt.Errorf("read %s: %w", v.Name, err)
 	}
-	parsed, err := parseVolume(v.Name, data)
+	return extractVolumeData(ctx, e, v.Name, data)
+}
+
+func extractVolumeData(ctx context.Context, e Extractor, name string, data []byte) error {
+	parsed, err := parseVolume(name, data)
 	if err != nil {
 		return err
 	}

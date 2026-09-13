@@ -8,16 +8,19 @@ import (
 	"errors"
 	"hash/crc32"
 	"io"
+	"regexp"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	ulzma "github.com/ulikunitz/xz/lzma"
 )
 
 // Info is Encoder names and arc.ini text collected from setup.exe.
 type Info struct {
-	Encoders []string // unique method/encoder tokens found
-	ArcINI   string   // arc.ini (or equivalent) text if present
+	Encoders     []string // unique method/encoder tokens found
+	ArcINI       string   // arc.ini (or equivalent) text if present
+	InstalledMD5 string   // contiguous installed-file manifest, relative to _Redist
 }
 
 const (
@@ -74,14 +77,37 @@ func Scan(r io.Reader) (Info, error) {
 
 	var u uniq
 	var arc string
+	var manifest string
 	for _, h := range hay {
 		if arc == "" {
 			arc = extractArcINI(h)
 		}
 		collectKnown(&u, h)
+		if candidate := installedMD5(h); len(candidate) > len(manifest) {
+			manifest = candidate
+		}
 	}
 	collectINI(&u, arc)
-	return Info{Encoders: u.list, ArcINI: arc}, nil
+	return Info{Encoders: u.list, ArcINI: arc, InstalledMD5: manifest}, nil
+}
+
+// The Inno payload includes the manifest as plain text. Require complete,
+// consecutive MD5 lines with the installer's _Redist-relative path prefix.
+var installedMD5Lines = regexp.MustCompile(`(?m)(?:[0-9a-fA-F]{32} \*\.\.\\[^\x00\r\n]+\r?\n)+`)
+
+func installedMD5(data []byte) string {
+	var best []byte
+	for _, b := range installedMD5Lines.FindAll(data, -1) {
+		if len(b) > len(best) {
+			best = b
+		}
+	}
+	if utf8.Valid(best) { return string(best) }
+	var out strings.Builder
+	for _, c := range best {
+		if c < 128 { out.WriteByte(c) } else { out.WriteRune(cp1251[c-128]) }
+	}
+	return out.String()
 }
 
 type uniq struct {
