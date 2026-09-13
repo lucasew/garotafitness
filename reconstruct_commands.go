@@ -5,10 +5,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"path"
 	"strconv"
 	"strings"
 
+	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness/fgpack"
 	"github.com/lucasew/garotafitness/fsb"
 	"github.com/lucasew/garotafitness/x2"
@@ -106,7 +106,7 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 }
 
 func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd string, depth int) error {
-	if strings.EqualFold(program, "{cmd}") || strings.EqualFold(path.Base(strings.ReplaceAll(program, "\\", "/")), "cmd.exe") {
+	if strings.EqualFold(program, "{cmd}") || strings.EqualFold(lewpath.New(strings.ReplaceAll(program, "\\", "/")).Name(), "cmd.exe") {
 		if len(args) < 3 || !strings.EqualFold(args[:3], "/c ") {
 			return fmt.Errorf("unsupported cmd parameters %q", args)
 		}
@@ -126,7 +126,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 	if depth > 32 {
 		return fmt.Errorf("recursive reconstruction recipe")
 	}
-	name := strings.ToLower(path.Base(strings.ReplaceAll(w[0], "\\", "/")))
+	name := strings.ToLower(lewpath.New(strings.ReplaceAll(w[0], "\\", "/")).Name())
 	a := w[1:]
 	slog.Info("recipe command", "program", name, "args", a, "cwd", cwd)
 	resolve := func(s string) (string, error) { return virtualPath(s, cwd) }
@@ -198,7 +198,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			return err
 		}
 		if name == "ren" || name == "rename" {
-			dest, err = virtualPath(a[1], path.Dir(source))
+			dest, err = virtualPath(a[1], lewpath.New(source).Parent().String())
 			if err != nil {
 				return err
 			}
@@ -208,7 +208,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			return err
 		}
 		if strings.HasSuffix(a[1], "\\") || strings.HasSuffix(a[1], "/") {
-			dest = path.Join(dest, path.Base(source))
+			dest = lewpath.New(dest, lewpath.New(source).Name()).String()
 		}
 		if err := p.remove(source, false); err != nil {
 			return err
@@ -336,7 +336,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
-		slog.Info("reconstruct compressed file", "name", path.Join(cwd, dest))
+		slog.Info("reconstruct compressed file", "name", lewpath.New(cwd, dest).String())
 		out, err := fgpack.EncodeWithOptions(ctx, b, options)
 		if err != nil {
 			return err

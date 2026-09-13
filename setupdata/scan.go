@@ -20,7 +20,7 @@ import (
 type Info struct {
 	Encoders     []string    // unique method/encoder tokens found
 	ArcINI       string      // arc.ini (or equivalent) text if present
-	InstalledMD5 string      // contiguous installed-file manifest, relative to _Redist
+	InstalledMD5 string      // contiguous installed-file manifest, relative to ManifestPath's directory
 	Operations   []Operation // reconstruction records recovered from compiled setup metadata
 	ManifestPath string      // {app}-relative checksum destination from Inno file metadata
 }
@@ -108,8 +108,8 @@ func Scan(r io.Reader) (Info, error) {
 }
 
 // The Inno payload includes the manifest as plain text. Require complete,
-// consecutive MD5 lines with the installer's _Redist-relative path prefix.
-var installedMD5Lines = regexp.MustCompile(`(?m)(?:[0-9a-fA-F]{32} \*\.\.\\[^\x00\r\n]+\r?\n)+`)
+// consecutive MD5 lines; paths are relative to its metadata destination.
+var installedMD5Lines = regexp.MustCompile(`(?m)(?:[0-9a-fA-F]{32} [ *][^\x00\r\n]+\r?\n)+`)
 
 func installedMD5(data []byte) string {
 	var best []byte

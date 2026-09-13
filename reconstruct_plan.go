@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"path"
 	"slices"
 	"strings"
 
+	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -23,6 +23,29 @@ type reconstructionPlan struct {
 
 func newStaging() *reconstruction {
 	return &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
+}
+
+// A volume is optional only when every extraction record that uses it is
+// optional. The filename convention is only a fallback without a setup record.
+func sourceComponents(ops []setupdata.Operation) (map[string]bool, error) {
+	optional := map[string]bool{}
+	for _, op := range ops {
+		if op.Kind != "extract" {
+			continue
+		}
+		source, err := virtualPath(op.Source, "")
+		if err != nil {
+			return nil, err
+		}
+		if name, ok := strings.CutPrefix(source, "src/"); ok {
+			flag := op.Optional
+			if previous, exists := optional[name]; exists {
+				flag = flag && previous
+			}
+			optional[name] = flag
+		}
+	}
+	return optional, nil
 }
 
 // virtualPath resolves installer paths inside three disjoint namespaces. Source
@@ -47,9 +70,9 @@ func virtualPath(name, cwd string) (string, error) {
 		return "", fmt.Errorf("reconstruction: invalid path %q", name)
 	}
 	if cwd != "" {
-		name = path.Join(cwd, name)
+		name = lewpath.New(cwd, name).String()
 	} else {
-		name = path.Clean(name)
+		name = lewpath.New(name).String()
 	}
 	root, _, _ := strings.Cut(name, "/")
 	if expectedRoot != "" && root != expectedRoot {
@@ -83,7 +106,7 @@ func (p *reconstructionPlan) store(name string) (*reconstruction, string, error)
 }
 func (p *reconstructionPlan) read(name string) ([]byte, error) {
 	if strings.HasPrefix(name, "src/") {
-		return fs.ReadFile(p.source, strings.TrimPrefix(name, "src/"))
+		return lewpath.New(strings.TrimPrefix(name, "src/")).ReadFile(p.source)
 	}
 	s, rel, err := p.store(name)
 	if err != nil {
@@ -115,7 +138,7 @@ func (p *reconstructionPlan) matches(pattern string, dirs bool) ([]string, error
 	root, _, _ := strings.Cut(pattern, "/")
 	var out []string
 	for name := range s.files {
-		ok, err := path.Match(strings.ToLower(rel), strings.ToLower(name))
+		ok, err := lewpath.New(strings.ToLower(name)).Match(strings.ToLower(rel))
 		if err != nil {
 			return nil, err
 		}
@@ -125,7 +148,7 @@ func (p *reconstructionPlan) matches(pattern string, dirs bool) ([]string, error
 	}
 	if dirs {
 		for name := range s.dirs {
-			ok, err := path.Match(strings.ToLower(rel), strings.ToLower(name))
+			ok, err := lewpath.New(strings.ToLower(name)).Match(strings.ToLower(rel))
 			if err != nil {
 				return nil, err
 			}
@@ -176,7 +199,7 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 		name := strings.TrimPrefix(source, "src/")
 		v, ok := p.volumes[name]
 		if !ok {
-			if op.Optional || strings.Contains(strings.ToLower(name), optionalMark) {
+			if op.Optional {
 				return nil
 			}
 			return fmt.Errorf("reconstruction: missing required volume %s", name)
@@ -217,7 +240,7 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 			}
 			name = name[len(filter)+1:]
 		}
-		return path.Join(prefix, name), true
+		return lewpath.New(prefix, name).String(), true
 	}
 	for name, mode := range staged.dirs {
 		if mapped, ok := mapName(name); ok {

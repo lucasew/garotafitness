@@ -38,12 +38,21 @@ func (e Extractor) Extract(ctx context.Context) error {
 	if n := len(setup.Operations); n > 0 {
 		slog.Info("setup reconstruction records", "count", n)
 	}
+	optional, err := sourceComponents(setup.Operations)
+	if err != nil {
+		return err
+	}
 	vols, err := listVolumes(e.Source)
 	if err != nil {
 		return err
 	}
 	slog.Info("volumes", "count", len(vols))
-	if err := verifyChecksums(e.Source, vols); err != nil {
+	for i := range vols {
+		if flag, ok := optional[vols[i].Name]; ok {
+			vols[i].Optional = flag
+		}
+	}
+	if err := verifyChecksums(e.Source, vols, optional); err != nil {
 		return err
 	}
 	if setup.InstalledMD5 != "" || len(setup.Operations) != 0 {
