@@ -14,7 +14,7 @@ const (
 
 const headerLen = 16
 
-// Header is the 16-byte tag on a raw mpz block (4x4 inner payload).
+// Header describes an MPZ stream. The literal-only version has no size fields.
 type Header struct {
 	Version uint32
 	Orig    uint32
@@ -22,7 +22,7 @@ type Header struct {
 	Extra   uint32
 }
 
-// ParseHeader reads the official 16-byte mpz tag.
+// ParseHeader reads the version and, for range-coded streams, the size fields.
 func ParseHeader(r io.Reader) (Header, error) {
 	var b [headerLen]byte
 	n, err := io.ReadFull(r, b[:4])
@@ -33,11 +33,10 @@ func ParseHeader(r io.Reader) (Header, error) {
 		return Header{}, err
 	}
 	ver := binary.LittleEndian.Uint32(b[0:4])
-	if ver != version5450 && ver != version5451 {
-		m, _ := io.ReadFull(r, b[4:8])
-		if foreign(b[:4+m]) {
-			return Header{}, errMagic
-		}
+	if ver == version5450 {
+		return Header{Version: ver}, nil
+	}
+	if ver != version5451 {
 		return Header{}, errMagic
 	}
 	if _, err := io.ReadFull(r, b[4:]); err != nil {

@@ -2,22 +2,16 @@
 package mpz
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 )
 
-// NewReader wraps a Sound Slimmer stream as compress/gzip does.
-//
-// On-disk tag is LE u32 0x01050405 (v5.4.5.1) then orig, frame
-// count, and a zero dword. RimWorld optional OST uses that as the
-// 4x4 inner method (srep:m3f:mem228mb+4x4:b16mb:mpz).
-//
-// Official decode is PE: arc.ini unpackcmd `mpz.exe d packed.mpz
-// out.mp3`. mpzapi (nishi mpzapi_v1b) only LoadLibrary's
-// MpzSlimmer.dll and calls GetModule()->process. INV-03 forbids
-// running that image. The guest is a mechanical RetDec
-// transcription of MP3Model (FULL.c) compiled to wasm.
+// NewReader decodes one bounded MPZ stream. Version 5.4.5.1 carries a
+// 16-byte header followed by range-coded MP3 frames and literal runs.
+// Version 5.4.5.0 carries complemented literal bytes after its four-byte tag.
+// The reconstructed decoder is compiled to WASM; no installer code is loaded.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
@@ -26,21 +20,32 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &reader{src: r, hdr: h}, nil
+	if h.Version == version5451 && (h.Orig == 0 || h.Orig > maxBlock) {
+		return nil, fmt.Errorf("mpz: invalid output size %d", h.Orig)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &reader{src: r, hdr: h, ctx: ctx, cancel: cancel}, nil
 }
 
+const maxBlock = 64 << 20
+
 type reader struct {
-	src io.Reader
-	hdr Header
-	buf []byte
-	off int
-	err error
-	eof bool
+	ctx    context.Context
+	cancel context.CancelFunc
+	src    io.Reader
+	hdr    Header
+	buf    []byte
+	off    int
+	err    error
+	eof    bool
 }
 
 func (r *reader) Read(p []byte) (int, error) {
 	if r.err != nil && r.off >= len(r.buf) {
 		return 0, r.err
+	}
+	if len(p) == 0 {
+		return 0, nil
 	}
 	if r.off >= len(r.buf) {
 		if r.eof {
@@ -51,12 +56,16 @@ func (r *reader) Read(p []byte) (int, error) {
 			return 0, err
 		}
 	}
+	if r.off == len(r.buf) && r.eof {
+		return 0, io.EOF
+	}
 	n := copy(p, r.buf[r.off:])
 	r.off += n
 	return n, nil
 }
 
 func (r *reader) Close() error {
+	r.cancel()
 	r.err = errClosed
 	r.buf = nil
 	r.src = nil
@@ -64,14 +73,25 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) fill() error {
-	src, err := io.ReadAll(r.src)
+	src, err := io.ReadAll(io.LimitReader(r.src, maxBlock+1))
 	if err != nil {
 		return err
+	}
+	if len(src) > maxBlock {
+		return fmt.Errorf("mpz: compressed block exceeds memory limit")
+	}
+	if r.hdr.Version == version5450 {
+		for i := range src {
+			src[i] ^= 255
+		}
+		r.buf = src
+		r.eof = true
+		return nil
 	}
 	if len(src) == 0 {
 		return fmt.Errorf("mpz: %s: %w", r.hdr, errGuest)
 	}
-	out, err := decodeWASM(src, r.hdr.Orig, r.hdr.Frames)
+	out, err := decodeWASM(r.ctx, src, r.hdr)
 	if err != nil {
 		return fmt.Errorf("mpz: %s: %w", r.hdr, err)
 	}
@@ -79,46 +99,6 @@ func (r *reader) fill() error {
 	r.off = 0
 	r.eof = true
 	return nil
-}
-
-func foreign(b []byte) bool {
-	if hasPrefix(b, []byte("ArC\x01")) {
-		return true
-	}
-	if hasPrefix(b, []byte("SREP")) {
-		return true
-	}
-	if hasPrefix(b, []byte{0x17, 0x18, 0x35, 0x26}) {
-		return true
-	}
-	if hasPrefix(b, []byte("OGGRE")) {
-		return true
-	}
-	if hasPrefix(b, []byte("CM(")) {
-		return true
-	}
-	if hasPrefix(b, []byte("DH(n")) {
-		return true
-	}
-	if hasPrefix(b, []byte("ID3")) {
-		return true
-	}
-	if len(b) >= 2 && b[0] == 0xff && b[1]&0xe0 == 0xe0 {
-		return true
-	}
-	return false
-}
-
-func hasPrefix(b, pfx []byte) bool {
-	if len(b) < len(pfx) {
-		return false
-	}
-	for i := range pfx {
-		if b[i] != pfx[i] {
-			return false
-		}
-	}
-	return true
 }
 
 var (

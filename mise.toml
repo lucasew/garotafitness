@@ -46,8 +46,13 @@ depends = ["test:*"]
 description = "Build SREP guest wasm with conda emscripten"
 run = "make -C srep"
 
+[tasks."build:reconstruction"]
+description = "Build the reconstruction and soundtrack WASM modules"
+run = "make -C fsb && make -C x5 && make -C fgpack && make -C xdelta && make -C mpz"
+
 [tasks."build:garotafitness"]
 description = "Build garotafitness into bin/"
+depends = ["build:srep", "build:reconstruction"]
 run = "go build -o bin/garotafitness ./cmd/garotafitness"
 
 [tasks.build]

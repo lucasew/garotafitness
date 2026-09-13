@@ -137,6 +137,9 @@ func TestOptionalOST(t *testing.T) {
 }
 
 func TestOptionalOSTFirstMP3(t *testing.T) {
+	if os.Getenv("GAROTAFITNESS_CORPUS_TESTS") == "" {
+		t.Skip("set GAROTAFITNESS_CORPUS_TESTS=1 for the full MPZ block check")
+	}
 	t.Parallel()
 	f, err := os.Open(optionalOST)
 	if err != nil {
@@ -168,12 +171,10 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 	t.Cleanup(func() { fx.Close() })
 	got, err := io.ReadAll(fx)
 	if err != nil || len(got) == 0 {
-		t.Logf("mpz guest: %v n=%d", err, len(got))
-		return
+		t.Fatalf("mpz guest: %v n=%d", err, len(got))
 	}
 	if !bytes.HasPrefix(got, []byte{0x17, 0x18, 0x35, 0x26}) && !bytes.HasPrefix(got, []byte("SREP")) {
-		t.Logf("mpz guest: no srep prefix (%d bytes)", len(got))
-		return
+		t.Fatalf("mpz guest: no srep prefix (%d bytes)", len(got))
 	}
 	sr, err := srep.NewReader(bytes.NewReader(got))
 	if err != nil {

@@ -18,12 +18,12 @@ func TestParseHeader(t *testing.T) {
 	if h.Version != version5451 || h.Orig != 16777216 || h.Frames != 19968 || h.Extra != 0 {
 		t.Fatalf("got %+v", h)
 	}
-	old := frameHead(version5450, 100, 1, 0)
+	old := frameHead(version5450, 100, 1, 0)[:4]
 	h, err = ParseHeader(bytes.NewReader(old))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.Version != version5450 || h.Orig != 100 {
+	if h.Version != version5450 || h.Orig != 0 {
 		t.Fatalf("got %+v", h)
 	}
 }

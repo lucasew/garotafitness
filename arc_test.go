@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"hash/crc32"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,10 +45,7 @@ func TestExtractRimWorldDecodedVolumes(t *testing.T) {
 			if _, err := os.Stat(filepath.Join(rimworldCorpus, name)); os.IsNotExist(err) {
 				t.Skip("corpus not mounted")
 			}
-			dst, err := OpenDirDest(t.TempDir())
-			if err != nil {
-				t.Fatal(err)
-			}
+			dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
 			e := Extractor{Source: os.DirFS(rimworldCorpus), Dest: dst}
 			if err := extractVolume(t.Context(), e, Volume{Name: name}); err != nil {
 				t.Fatal(err)
@@ -150,5 +148,26 @@ func TestRimWorldPipelineInventory(t *testing.T) {
 	}
 	if len(seen) == 0 {
 		t.Fatal("no pipelines")
+	}
+}
+
+func TestReconstructionRequiresManifest(t *testing.T) {
+	if _, err := os.Stat(filepath.Join(rimworldCorpus, "fg-01.bin")); err != nil {
+		t.Skip("corpus not mounted")
+	}
+	dst, err := OpenDirDest(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = extractVolume(t.Context(), Extractor{Source: os.DirFS(rimworldCorpus), Dest: dst}, Volume{Name: "fg-01.bin"})
+	if err == nil || !strings.Contains(err.Error(), "checksum manifest") {
+		t.Fatalf("got %v", err)
+	}
+	entries, err := os.ReadDir(dst.Root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatal("wrote intermediates without reconstruction")
 	}
 }
