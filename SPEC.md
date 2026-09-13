@@ -13,6 +13,11 @@ RFC 8174) when, and only when, they appear in all capitals.
 
 Job: Extract a local FitGirl repack into a destination tree without running `setup.exe`.
 
+RimWorld is the test corpus. Reconstruction MUST derive file relationships,
+destinations, compression parameters, and cleanup rules from installer metadata,
+volume pipelines, and checksum manifests. Game titles, DLC names, fixed file
+counts, and corpus-specific path lists MUST NOT select production behavior.
+
 Non-goals:
 
 1. Download, torrent, or scrape releases.
@@ -33,7 +38,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | TEC-01 | argv | One command `extract` plus two directory operands | A run of the Extractor |
 | TEC-02 | Source `fs.FS` plus Dest | The Extractor reads only Source. The Extractor writes only Dest. The CLI creates Dest if missing | Files under Dest |
 | TEC-03 | The Extractor result | `log/slog` on stderr. Exit 0 only when every required Volume finished. Exit 1 on any failure | Process status |
-| TEC-04 | `setup.exe` bytes plus Volume headers | Read them as data. Collect Encoder names. Never map those bytes as executable | A set of Encoder names |
+| TEC-04 | `setup.exe` bytes plus Volume headers | Read them as data. Collect Encoder names and statically recover reconstruction records. Never map those bytes as executable or run installer scripts | Encoder names and reconstruction metadata |
 | TEC-05 | One Encoder name | If an official implementation of that Encoder exists, wrap it as a Go stream primitive. If none exists, reverse-engineer that Encoder. One Encoder per package | `NewReader(io.Reader) (io.ReadCloser, error)` in the shape of `compress/gzip` |
 | TEC-06 | A Volume (`ArC\x01`) | Parse the container in the shape of `archive/tar`. Send each solid block through the Encoder pipeline TEC-05 named | Members written through Dest |
 | TEC-07 | Official C or C++ for an Encoder | Compile to `wasm32-wasip1`. Run the Guest in-process through wazero. WASI preview1 mounts Source read-only and Dest read-write. One Guest per Encoder when the official code is not Go | Decompressed bytes inside the same process |
@@ -153,7 +158,11 @@ N/A for the library surface (genre=library).
 
 ## Public contract
 
-Library: `Extractor.Extract` is the composition entry. Each Algo package `<algo>/` exports `NewReader`. `Decode` in the root package is the switch. Volume open is the container entry. `4x4` Params hold the inner method. x2, x3, x5, and fgpack are Algos.
+Library: `Extractor.Extract` is the composition entry. Stream Algo packages expose
+`NewReader`; `Decode` in the root package composes them. Reconstruction transforms
+take source bytes, patch bytes, and compression parameters recovered from the
+installer records. Volume open is the container entry. `4x4` Params hold the inner
+method. x2, x3, x5, and fgpack each retain their own package.
 
 CLI:
 
@@ -187,6 +196,8 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - [ ] A Member name that contains `..` does not create a file outside Dest. The command exits 1.
 - [ ] No process other than `garotafitness` runs during extract.
 - [ ] `setup.exe` is never executed.
+- [ ] Independent fixtures with different filenames, destinations, file counts,
+  and compression parameters work without a game-specific configuration.
 
 ## Later work
 

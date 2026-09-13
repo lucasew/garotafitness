@@ -10,7 +10,7 @@ import (
 func TestInstalledChecksums(t *testing.T) {
 	s := &reconstruction{files: map[string][]byte{"Data/a.txt": []byte("abc")}}
 	manifest := "900150983cd24fb0d6963f7d28e17f72 *..\\Data\\a.txt\r\n"
-	if err := s.verifyInstalled(t.Context(), manifest); err != nil {
+	if err := s.verifyInstalled(t.Context(), manifest, "_Redist"); err != nil {
 		t.Fatal(err)
 	}
 	for _, bad := range []string{
@@ -19,13 +19,13 @@ func TestInstalledChecksums(t *testing.T) {
 		strings.Replace(manifest, "Data\\a.txt", "..\\escape", 1),
 		strings.Replace(manifest, "Data\\a.txt", "C:\\escape", 1),
 	} {
-		if err := s.verifyInstalled(t.Context(), bad); err == nil {
+		if err := s.verifyInstalled(t.Context(), bad, "_Redist"); err == nil {
 			t.Fatalf("accepted %q", bad)
 		}
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if err := s.verifyInstalled(ctx, manifest); !errors.Is(err, context.Canceled) {
+	if err := s.verifyInstalled(ctx, manifest, "_Redist"); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }

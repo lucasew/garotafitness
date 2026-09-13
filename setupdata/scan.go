@@ -18,9 +18,11 @@ import (
 
 // Info is Encoder names and arc.ini text collected from setup.exe.
 type Info struct {
-	Encoders     []string // unique method/encoder tokens found
-	ArcINI       string   // arc.ini (or equivalent) text if present
-	InstalledMD5 string   // contiguous installed-file manifest, relative to _Redist
+	Encoders     []string    // unique method/encoder tokens found
+	ArcINI       string      // arc.ini (or equivalent) text if present
+	InstalledMD5 string      // contiguous installed-file manifest, relative to _Redist
+	Operations   []Operation // reconstruction records recovered from compiled setup metadata
+	ManifestPath string      // {app}-relative checksum destination from Inno file metadata
 }
 
 const (
@@ -78,7 +80,12 @@ func Scan(r io.Reader) (Info, error) {
 	var u uniq
 	var arc string
 	var manifest string
+	var operations []Operation
+	var manifestPath string
 	for _, h := range hay {
+		if candidate := installedManifestPath(h); candidate != "" {
+			manifestPath = candidate
+		}
 		if arc == "" {
 			arc = extractArcINI(h)
 		}
@@ -86,9 +93,18 @@ func Scan(r io.Reader) (Info, error) {
 		if candidate := installedMD5(h); len(candidate) > len(manifest) {
 			manifest = candidate
 		}
+		if i := bytes.Index(h, []byte("IFPS")); i >= 0 {
+			plan, err := reconstructionPlan(h[i:])
+			if err != nil {
+				return Info{}, err
+			}
+			if len(plan) > len(operations) {
+				operations = plan
+			}
+		}
 	}
 	collectINI(&u, arc)
-	return Info{Encoders: u.list, ArcINI: arc, InstalledMD5: manifest}, nil
+	return Info{Encoders: u.list, ArcINI: arc, InstalledMD5: manifest, Operations: operations, ManifestPath: manifestPath}, nil
 }
 
 // The Inno payload includes the manifest as plain text. Require complete,

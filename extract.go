@@ -31,7 +31,7 @@ func (e Extractor) Extract(ctx context.Context) error {
 	}
 	setup, setupErr := readSetup(e.Source)
 	if err := setupErr; err != nil {
-		slog.Info("setup.exe", "err", err)
+		return fmt.Errorf("setup.exe: %w", err)
 	} else if len(setup.Encoders) > 0 {
 		slog.Info("setup encoders", "names", setup.Encoders)
 	}
@@ -42,8 +42,8 @@ func (e Extractor) Extract(ctx context.Context) error {
 	if err := verifyChecksums(e.Source, vols); err != nil {
 		return err
 	}
-	if setup.InstalledMD5 != "" {
-		return e.extractReconstructed(ctx, vols, setup.InstalledMD5)
+	if setup.InstalledMD5 != "" || len(setup.Operations) != 0 {
+		return e.extractReconstructed(ctx, vols, setup)
 	}
 	for _, v := range vols {
 		if err := ctx.Err(); err != nil {
@@ -93,13 +93,6 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 	parsed, err := parseVolume(name, data)
 	if err != nil {
 		return err
-	}
-	if _, staged := e.Dest.(*reconstruction); !staged {
-		for _, m := range parsed.Members {
-			if m.Path == "inner.fgpack" || m.Path == "rimworld.x3" {
-				return fmt.Errorf("%s: reconstruction requires the installed-file checksum manifest from setup.exe", name)
-			}
-		}
 	}
 	for _, m := range parsed.Members {
 		if !m.Dir {
