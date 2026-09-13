@@ -67,6 +67,9 @@ func TestScanCorpus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if n := strings.Count(info.InstalledMD5, "\n"); n != 1712 {
+		t.Fatalf("installed manifest has %d entries, want 1712", n)
+	}
 	if len(info.Encoders) == 0 {
 		t.Fatal("empty encoder list")
 	}
@@ -125,4 +128,26 @@ func clip(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+func TestInstalledManifestEncoding(t *testing.T) {
+	prefix := "900150983cd24fb0d6963f7d28e17f72 *..\\Data\\"
+	for _, tt := range []struct {
+		name    string
+		encoded []byte
+		want    string
+	}{
+		{"UTF8", []byte(prefix + "Я.txt\r\n"), prefix + "Я.txt\r\n"},
+		{"Windows1251", append([]byte(prefix), []byte{0xdf, '.', 't', 'x', 't', '\r', '\n'}...), prefix + "Я.txt\r\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			input := append([]byte("\x00unrelated\x00"), tt.encoded...)
+			if got := installedMD5(input); got != tt.want {
+				t.Fatalf("got %q; want %q", got, tt.want)
+			}
+		})
+	}
+	if got := installedMD5([]byte("900150983cd24fb0d6963f7d28e17f72 *..\\truncated")); got != "" {
+		t.Fatalf("accepted unterminated manifest: %q", got)
+	}
 }

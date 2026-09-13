@@ -15,11 +15,11 @@ import (
 
 const optionalOST = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-optional-bonus-soundtrack.bin`
 
-// Smallest member in the optional solid (FreeArc IEEE CRC32).
+// First member in the optional solid (FreeArc custom CRC32).
 const (
-	firstMP3Path = "Soundtrack/25 Cruel Sunrise.mp3"
-	firstMP3Size = 1687262
-	firstMP3CRC  = 0xf11f45c6
+	firstMP3Path = "Soundtrack/1 RimWorld Trailer Music.mp3"
+	firstMP3Size = 3468604
+	firstMP3CRC  = 0xf7a85e73
 )
 
 func TestNewReader(t *testing.T) {
@@ -184,7 +184,7 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 	if _, err := io.ReadFull(sr, first); err != nil {
 		t.Fatal(err)
 	}
-	sum := crc32.ChecksumIEEE(first)
+	sum := crc32.Checksum(first, crc32.MakeTable(0x0895171b))
 	if sum != firstMP3CRC {
 		t.Fatalf("%s crc %08x want %08x", firstMP3Path, sum, firstMP3CRC)
 	}

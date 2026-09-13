@@ -94,6 +94,13 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 	if err != nil {
 		return err
 	}
+	if _, staged := e.Dest.(*reconstruction); !staged {
+		for _, m := range parsed.Members {
+			if m.Path == "inner.fgpack" || m.Path == "rimworld.x3" {
+				return fmt.Errorf("%s: reconstruction requires the installed-file checksum manifest from setup.exe", name)
+			}
+		}
+	}
 	for _, m := range parsed.Members {
 		if !m.Dir {
 			continue

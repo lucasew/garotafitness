@@ -102,10 +102,16 @@ func installedMD5(data []byte) string {
 			best = b
 		}
 	}
-	if utf8.Valid(best) { return string(best) }
+	if utf8.Valid(best) {
+		return string(best)
+	}
 	var out strings.Builder
 	for _, c := range best {
-		if c < 128 { out.WriteByte(c) } else { out.WriteRune(cp1251[c-128]) }
+		if c < 128 {
+			out.WriteByte(c)
+		} else {
+			out.WriteRune(cp1251[c-128])
+		}
 	}
 	return out.String()
 }
