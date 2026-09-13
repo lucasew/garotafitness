@@ -57,7 +57,7 @@ Inherited C (cite the file): `mise.toml`. Go comes from the mise registry. Compi
 | TEC-05 storing | identity `io.Reader` | implement | a Guest for uncompressed | stdlib:io |
 | TEC-06 | `xredor/unarc` compiled as a Guest | wrap | write an ArC parser | github.com/xredor/unarc |
 | TEC-07 | wazero plus conda emscripten | adopt | cgo, wasmtime, a subprocess | github.com/tetratelabs/wazero ; conda-forge:emscripten |
-| TEC-08 | `path/filepath` clean plus prefix check | adopt | write after a `..` escape | stdlib:path/filepath |
+| TEC-08 | lewkit `x/path` Root (`os.OpenRoot`) | adopt | join host paths and check `..` by hand | github.com/lewtec/lewkit/x/path |
 | TEC-03 MD5 | `crypto/md5` when `MD5/fitgirl-bins.md5` exists | adopt | skip a present checksum file | stdlib:crypto/md5 |
 
 | Cell | Pick | C or D | Implements | Cite if C |

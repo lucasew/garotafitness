@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
-	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/test"
 )
 
 // This checks the public extraction flow and then reopens every installed file.
@@ -22,27 +23,32 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 	if mode != "all" && mode != "required" {
 		t.Fatal("GAROTAFITNESS_FULL_EXTRACT must be all or required")
 	}
-	source := os.DirFS(rimworldCorpus)
-	if _, err := fs.Stat(source, "setup.exe"); err != nil {
+	source := openCorpus(t)
+	if ok, err := lewpath.New("setup.exe").Exists(source); err != nil || !ok {
 		t.Skip("corpus not mounted")
 	}
 	if mode == "required" {
-		dir := t.TempDir()
+		tmp, err := lewpath.Open(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		test.CloseOnCleanup(t, tmp)
 		for _, name := range []string{"setup.exe", "MD5", "fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin", "fg-05.bin", "fg-06.bin"} {
-			if err := os.Symlink(filepath.Join(rimworldCorpus, name), filepath.Join(dir, name)); err != nil {
+			if err := tmp.Symlink(source.Name()+"/"+name, name); err != nil {
 				t.Fatal(err)
 			}
 		}
-		source = os.DirFS(dir)
+		source = tmp
 	}
 	dst, err := OpenDirDest(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
+	test.CloseOnCleanup(t, dst)
 	if err := (Extractor{Source: source, Dest: dst}).Extract(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	manifest, err := os.ReadFile(filepath.Join(dst.Root, "_Redist/fitgirl.md5"))
+	manifest, err := lewpath.New("_Redist/fitgirl.md5").ReadFile(dst)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +58,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 		if !ok {
 			t.Fatalf("invalid manifest line %q", line)
 		}
-		f, err := os.Open(filepath.Join(dst.Root, filepath.FromSlash(strings.ReplaceAll(name, "\\", "/"))))
+		f, err := lewpath.New(strings.ReplaceAll(name, "\\", "/")).Open(dst)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -70,10 +76,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 	if count != 1712 {
 		t.Fatalf("verified %d files, want 1712", count)
 	}
-	tracks, err := filepath.Glob(filepath.Join(dst.Root, "Soundtrack/*.mp3"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	tracks := test.Collect(t, lewpath.New("Soundtrack").Glob(dst, "*.mp3"))
 	want := 0
 	if mode == "all" {
 		want = 31
@@ -83,7 +86,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 	}
 	if mode == "all" {
 		name := "fg-optional-bonus-soundtrack.bin"
-		data, err := fs.ReadFile(source, name)
+		data, err := lewpath.New(name).ReadFile(source)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -95,7 +98,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 			if m.Dir {
 				continue
 			}
-			f, err := os.Open(filepath.Join(dst.Root, filepath.FromSlash(m.Path)))
+			f, err := lewpath.New(m.Path).Open(dst)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,8 +111,12 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 		}
 	}
 	for _, name := range []string{"inner.fgpack", "rimworld.x3", "temp", "work", "mover"} {
-		if _, err := os.Stat(filepath.Join(dst.Root, name)); !os.IsNotExist(err) {
-			t.Fatalf("intermediate %s remains: %v", name, err)
+		ok, err := lewpath.New(name).Exists(dst)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ok {
+			t.Fatalf("intermediate %s remains", name)
 		}
 	}
 }

@@ -3,8 +3,9 @@ package magic2
 import (
 	"bytes"
 	"io"
-	"os"
 	"testing"
+
+	lewpath "github.com/lewtec/lewkit/x/path"
 )
 
 func TestHeader(t *testing.T) {
@@ -13,7 +14,7 @@ func TestHeader(t *testing.T) {
 		dictionary uint32
 	}{{"fg06.head", 16 << 20}, {"fg02.head", 480 << 20}} {
 		t.Run(tt.name, func(t *testing.T) {
-			b, err := os.ReadFile("testdata/" + tt.name)
+			b, err := lewpath.New(tt.name).ReadFile(testdataRoot(t))
 			if err != nil {
 				t.Fatal(err)
 			}

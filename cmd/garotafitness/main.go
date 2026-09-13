@@ -31,8 +31,8 @@ func (*root) Run(context.Context) error {
 }
 
 type extractCmd struct {
-	Source cmd.StringArg `help:"directory with setup.exe and fg-*.bin volumes"`
-	Dest   cmd.StringArg `help:"destination directory (created if missing)"`
+	Source garotafitness.SourceArg `help:"directory with setup.exe and fg-*.bin volumes"`
+	Dest   garotafitness.DestArg   `help:"destination directory (created if missing)"`
 }
 
 func (extractCmd) Description() string {
@@ -40,28 +40,15 @@ func (extractCmd) Description() string {
 }
 
 func (c *extractCmd) Run(ctx context.Context) error {
-	srcRoot := c.Source.Value()
-	dstRoot := c.Dest.Value()
-	if srcRoot == "" || dstRoot == "" {
+	src := c.Source.Value()
+	dst := c.Dest.Value()
+	if src == nil || dst.Name() == "" {
 		return fmt.Errorf("usage: garotafitness extract SOURCE DEST")
 	}
-	srcInfo, err := os.Stat(srcRoot)
-	if err != nil {
-		return fmt.Errorf("source: %w", err)
-	}
-	if !srcInfo.IsDir() {
-		return fmt.Errorf("source is not a directory")
-	}
-	dst, err := garotafitness.OpenDirDest(dstRoot)
-	if err != nil {
-		return err
-	}
-	slog.Info("extract", "source", srcRoot, "dest", dst.Root)
-	ex := garotafitness.Extractor{
-		Source: os.DirFS(srcRoot),
-		Dest:   dst,
-	}
-	return ex.Extract(ctx)
+	defer c.Source.Close()
+	defer c.Dest.Close()
+	slog.Info("extract", "source", src.Name(), "dest", dst.Name())
+	return garotafitness.Extractor{Source: src, Dest: dst}.Extract(ctx)
 }
 
 func run(args []string) error {

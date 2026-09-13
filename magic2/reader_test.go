@@ -5,22 +5,16 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"os"
 	"testing"
 )
 
 func TestFG06(t *testing.T) {
-	const corpus = "/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-06.bin"
-	f, err := os.Open(corpus)
-	if os.IsNotExist(err) {
-		t.Skip("corpus not mounted")
-	}
-	if err != nil {
+	f := openCorpusFile(t, "fg-06.bin")
+	if _, err := f.Seek(31, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
 	data := make([]byte, 93116)
-	if _, err := f.ReadAt(data, 31); err != nil {
+	if _, err := io.ReadFull(f, data); err != nil {
 		t.Fatal(err)
 	}
 	r, err := NewReader(bytes.NewReader(data))

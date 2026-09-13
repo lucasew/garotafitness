@@ -228,7 +228,7 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 	}
 	for name, b := range staged.files {
 		if mapped, ok := mapName(name); ok {
-			if _, err := memberPath(".", mapped); err != nil {
+			if _, err := memberName(mapped); err != nil {
 				return err
 			}
 			store.files[mapped] = b

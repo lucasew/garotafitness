@@ -3,17 +3,12 @@ package setupdata
 import (
 	"bytes"
 	"encoding/binary"
-	"os"
 	"strings"
 	"testing"
 )
 
 func TestSetupReconstructionPlan(t *testing.T) {
-	f, err := os.Open(rimworldSetup)
-	if err != nil {
-		t.Skip("corpus not mounted")
-	}
-	defer f.Close()
+	f := openCorpusFile(t, "setup.exe")
 	info, err := Scan(f)
 	if err != nil {
 		t.Fatal(err)

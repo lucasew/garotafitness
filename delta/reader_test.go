@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
+
+	lewpath "github.com/lewtec/lewkit/x/path"
 )
 
 func TestOfficialNoTable(t *testing.T) {
@@ -107,11 +107,12 @@ func TestEmpty(t *testing.T) {
 
 func assertGolden(t *testing.T, packed, plain string) {
 	t.Helper()
-	in, err := os.ReadFile(filepath.Join("testdata", packed))
+	td := testdataRoot(t)
+	in, err := lewpath.New(packed).ReadFile(td)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", plain))
+	want, err := lewpath.New(plain).ReadFile(td)
 	if err != nil {
 		t.Fatal(err)
 	}

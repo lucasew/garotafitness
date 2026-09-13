@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"hash/crc32"
 	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
+
+	lewpath "github.com/lewtec/lewkit/x/path"
 )
 
 func TestArchiveDescriptorCRC(t *testing.T) {
@@ -40,21 +40,21 @@ func TestArchiveDescriptorCRC(t *testing.T) {
 }
 
 func TestExtractRimWorldDecodedVolumes(t *testing.T) {
+	src := openCorpus(t)
 	for _, name := range []string{"fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin", "fg-05.bin", "fg-06.bin"} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := os.Stat(filepath.Join(rimworldCorpus, name)); os.IsNotExist(err) {
+			ok, err := lewpath.New(name).Exists(src)
+			if err != nil || !ok {
 				t.Skip("corpus not mounted")
 			}
 			dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
-			e := Extractor{Source: os.DirFS(rimworldCorpus), Dest: dst}
+			e := Extractor{Source: src, Dest: dst}
 			if err := extractVolume(t.Context(), e, Volume{Name: name}); err != nil {
 				t.Fatal(err)
 			}
 		})
 	}
 }
-
-const rimworldCorpus = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]`
 
 func TestPackedRoundTripSmall(t *testing.T) {
 	t.Parallel()
@@ -66,9 +66,7 @@ func TestPackedRoundTripSmall(t *testing.T) {
 }
 
 func TestParseRimWorldVolumes(t *testing.T) {
-	if _, err := os.Stat(rimworldCorpus); err != nil {
-		t.Skip("corpus not mounted")
-	}
+	src := openCorpus(t)
 	cases := []struct {
 		file   string
 		member string
@@ -81,7 +79,7 @@ func TestParseRimWorldVolumes(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.file, func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join(rimworldCorpus, tc.file))
+			data, err := lewpath.New(tc.file).ReadFile(src)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -109,20 +107,17 @@ func TestParseRimWorldVolumes(t *testing.T) {
 }
 
 func TestRimWorldPipelineInventory(t *testing.T) {
-	if _, err := os.Stat(rimworldCorpus); err != nil {
-		t.Skip("corpus not mounted")
-	}
-	ents, err := os.ReadDir(rimworldCorpus)
-	if err != nil {
-		t.Fatal(err)
-	}
+	src := openCorpus(t)
 	seen := map[string]Algo{}
-	for _, e := range ents {
-		name := e.Name()
+	for p, err := range lewpath.New(".").IterDir(src) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := p.Name()
 		if !strings.HasPrefix(name, "fg-") || !strings.HasSuffix(name, ".bin") {
 			continue
 		}
-		data, err := os.ReadFile(filepath.Join(rimworldCorpus, name))
+		data, err := p.ReadFile(src)
 		if err != nil {
 			t.Fatal(err)
 		}

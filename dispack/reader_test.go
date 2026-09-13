@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
+
+	lewpath "github.com/lewtec/lewkit/x/path"
 )
 
 func TestTagData(t *testing.T) {
@@ -38,11 +38,12 @@ func TestOfficialJumpTable(t *testing.T) {
 
 func TestUnfilterDirect(t *testing.T) {
 	t.Parallel()
-	src, err := os.ReadFile(filepath.Join("testdata", "code.filt"))
+	td := testdataRoot(t)
+	src, err := lewpath.New("code.filt").ReadFile(td)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", "code.plain"))
+	want, err := lewpath.New("code.plain").ReadFile(td)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,11 +94,12 @@ func TestBadTag(t *testing.T) {
 
 func assertEXE(t *testing.T, filt, plain string) {
 	t.Helper()
-	src, err := os.ReadFile(filepath.Join("testdata", filt))
+	td := testdataRoot(t)
+	src, err := lewpath.New(filt).ReadFile(td)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile(filepath.Join("testdata", plain))
+	want, err := lewpath.New(plain).ReadFile(td)
 	if err != nil {
 		t.Fatal(err)
 	}

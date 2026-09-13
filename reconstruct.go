@@ -25,7 +25,7 @@ type reconstruction struct {
 }
 
 func (s *reconstruction) MkdirAll(name string, mode fs.FileMode) error {
-	if _, err := memberPath(".", name); err != nil {
+	if _, err := memberName(name); err != nil {
 		return err
 	}
 	s.dirs[name] = mode
@@ -33,7 +33,7 @@ func (s *reconstruction) MkdirAll(name string, mode fs.FileMode) error {
 }
 
 func (s *reconstruction) Create(name string) (io.WriteCloser, error) {
-	if _, err := memberPath(".", name); err != nil {
+	if _, err := memberName(name); err != nil {
 		return nil, err
 	}
 	return &stagedFile{store: s, name: name}, nil
