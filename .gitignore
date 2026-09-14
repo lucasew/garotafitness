@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /tmp/
 *.wasm
 !srep/srepdec.wasm

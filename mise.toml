@@ -5,6 +5,8 @@
 # or registry clang. WASM guests use conda:emscripten (same pin as gameweb).
 [tools]
 go = "1.27.0"
+goreleaser = "2.17.0"
+svu = "3.3.0"
 "conda:make" = "4.4.1"
 "conda:gxx" = "16.2.0"
 "conda:clang" = "23.1.0"
@@ -62,3 +64,17 @@ depends = ["build:*"]
 [tasks.ci]
 description = "install, fmt, lint, test, build"
 depends = ["install", "fmt", "lint", "test", "build"]
+
+[tasks.release]
+description = "Tag with svu and publish with goreleaser"
+depends = ["ci"]
+usage = '''
+arg "<version>" help="New version" {
+  choices "next" "major" "minor" "patch"
+  default "next"
+}
+'''
+run = [
+  "git tag $(svu ${usage_version})",
+  "goreleaser release --clean",
+]
