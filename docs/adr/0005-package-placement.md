@@ -1,6 +1,6 @@
 # ADR-0005: one Algo package at module root
 
-Status: accepted
+Status: superseded by ADR-0007
 
 Each Algo lives in `github.com/lucasew/garotafitness/<algo>`.
 `NewReader(io.Reader) (io.ReadCloser, error)` is the only decoder

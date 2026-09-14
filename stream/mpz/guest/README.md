@@ -24,8 +24,8 @@ To reproduce the C translation with the local corpus and LLVM tools:
 
 ```sh
 llvm-objdump -d --no-show-raw-insn MpzSlimmer.dll > mpzdll.asm
-python3 mpz/guest/lift.py MpzSlimmer.dll mpzdll.asm mpz/guest
-make -C mpz
+python3 stream/mpz/guest/lift.py MpzSlimmer.dll mpzdll.asm stream/mpz/guest
+make -C stream/mpz
 ```
 
 `decoder.c` and the tables are checked in, so ordinary builds need neither the

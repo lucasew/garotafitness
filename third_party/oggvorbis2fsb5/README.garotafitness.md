@@ -7,4 +7,4 @@ Sources for the FSB5 remux Guest:
 Only the C sources and headers required by the remuxer are included. The remuxer
 uses stdin/stdout in place of the two filename arguments, rejects empty input,
 and checks stream I/O errors. Its packet and FSB5 serialization are unchanged.
-Build with `make -C fsb` using the project's emscripten toolchain.
+Build with `make -C reconstruct/fsb` using the project's emscripten toolchain.

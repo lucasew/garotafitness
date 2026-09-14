@@ -158,11 +158,11 @@ N/A for the library surface (genre=library).
 
 ## Public contract
 
-Library: `Extractor.Extract` is the composition entry. Stream Algo packages expose
-`NewReader`; `Decode` in the root package composes them. Reconstruction transforms
-take source bytes, patch bytes, and compression parameters recovered from the
-installer records. Volume open is the container entry. `4x4` Params hold the inner
-method. x2, x3, x5, and fgpack each retain their own package.
+Library: `Extractor.Extract` is the composition entry. Stream Algo packages live
+under `stream/` and expose `NewReader`; `Decode` in the root package composes
+them. Reconstruction transforms live under `reconstruct/` and take source bytes,
+patch bytes, and compression parameters recovered from the installer records.
+Volume open is the container entry. `4x4` Params hold the inner method.
 
 CLI:
 
@@ -223,5 +223,6 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - ADR-0002: C++ runs as in-process WASM through wazero. Rejected subprocess and cgo.
 - ADR-0003: `setup.exe` is signal data. Rejected execution of installer DLLs.
 - ADR-0004: Compilers come from mise `conda:`. Rejected nix, host g++, registry clang.
-- ADR-0005: One Algo package at module root. Agents do not edit the Decode switch.
+- ADR-0005: One Algo package at module root. Superseded by ADR-0007.
 - ADR-0006: SREP v3 Future-LZ stays C++; Go owns the block loop. Guest is emscripten wasm. Go port later.
+- ADR-0007: Stream atoms under `stream/`, reconstruction under `reconstruct/`. `Algo` is stream-only. Root still owns `Decode`.

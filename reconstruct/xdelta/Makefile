@@ -1,5 +1,5 @@
 EMCC ?= emcc
-SRC = ../third_party/xdelta3
+SRC = ../../third_party/xdelta3
 
 xdelta.wasm: guest/main.c $(SRC)/xdelta3.c $(wildcard $(SRC)/*.h)
 	$(EMCC) -O1 -std=gnu11 --no-entry -I$(SRC) guest/main.c $(SRC)/xdelta3.c \

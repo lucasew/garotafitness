@@ -9,9 +9,9 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lucasew/garotafitness/fourx4"
+	"github.com/lucasew/garotafitness/stream/fourx4"
 	"github.com/lucasew/garotafitness/internal/corpus"
-	"github.com/lucasew/garotafitness/srep"
+	"github.com/lucasew/garotafitness/stream/srep"
 )
 
 // First member in the optional solid (FreeArc custom CRC32).

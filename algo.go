@@ -20,10 +20,6 @@ const (
 	AlgoDelta
 	AlgoREP
 	AlgoPPMD
-	AlgoX2
-	AlgoX3
-	AlgoX5
-	AlgoFgpack
 )
 
 var algoName = [...]string{
@@ -41,10 +37,6 @@ var algoName = [...]string{
 	AlgoDelta:   "delta",
 	AlgoREP:     "rep",
 	AlgoPPMD:    "ppmd",
-	AlgoX2:      "x2",
-	AlgoX3:      "x3",
-	AlgoX5:      "x5",
-	AlgoFgpack:  "fgpack",
 }
 
 var algoByName = map[string]Algo{
@@ -63,10 +55,6 @@ var algoByName = map[string]Algo{
 	"delta":      AlgoDelta,
 	"rep":        AlgoREP,
 	"ppmd":       AlgoPPMD,
-	"x2":         AlgoX2,
-	"x3":         AlgoX3,
-	"x5":         AlgoX5,
-	"fgpack":     AlgoFgpack,
 }
 
 // String returns the canonical on-disk name.

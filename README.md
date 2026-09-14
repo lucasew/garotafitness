@@ -33,8 +33,8 @@ return errors.
 
 Compiled WASM modules are included. To rebuild the reconstruction modules, use
 the compilers in `mise.toml` and run `mise run build:reconstruction`. The MPZ
-translation is documented in [mpz/guest/README.md](mpz/guest/README.md), and the
-RTPatch format in [x3/README.md](x3/README.md).
+translation is documented in [stream/mpz/guest/README.md](stream/mpz/guest/README.md), and the
+RTPatch format in [reconstruct/x3/README.md](reconstruct/x3/README.md).
 
 RimWorld is the integration-test corpus. Independent fixtures also exercise
 different filenames, archive destinations, file counts, compression options,

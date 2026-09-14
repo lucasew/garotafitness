@@ -11,7 +11,7 @@ import (
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness/internal/corpus"
-	"github.com/lucasew/garotafitness/srep"
+	"github.com/lucasew/garotafitness/stream/srep"
 )
 
 // fg-01 after SREP: testdata/header.hex.

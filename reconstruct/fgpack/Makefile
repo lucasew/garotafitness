@@ -1,5 +1,5 @@
 EMCC ?= emcc
-SRC = ../third_party/lzma-sdk19
+SRC = ../../third_party/lzma-sdk19
 SOURCES = guest/main.c $(SRC)/LzmaEnc.c $(SRC)/LzFind.c $(SRC)/Alloc.c
 
 fgpack.wasm: $(SOURCES) $(wildcard $(SRC)/*.h)
