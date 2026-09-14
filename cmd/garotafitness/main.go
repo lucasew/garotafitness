@@ -32,8 +32,8 @@ func (*root) Run(context.Context) error {
 }
 
 type extractCmd struct {
-	Source cmd.DataDirArg `help:"directory with setup.exe and fg-*.bin volumes"`
-	Dest   cmd.StringArg  `help:"destination directory (created if missing)"`
+	Source cmd.WorkDirArg `help:"repack directory with setup.exe and fg-*.bin volumes"`
+	Dest   cmd.DataDirArg `help:"destination directory"`
 }
 
 func (extractCmd) Description() string {

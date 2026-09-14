@@ -40,7 +40,7 @@ func TestArchiveDescriptorCRC(t *testing.T) {
 	}
 }
 
-func TestExtractRimWorldDecodedVolumes(t *testing.T) {
+func TestExtractDecodedVolumes(t *testing.T) {
 	src := corpus.Open(t)
 	for _, name := range []string{"fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin", "fg-05.bin", "fg-06.bin"} {
 		t.Run(name, func(t *testing.T) {
@@ -66,7 +66,7 @@ func TestPackedRoundTripSmall(t *testing.T) {
 	}
 }
 
-func TestParseRimWorldVolumes(t *testing.T) {
+func TestParseCorpusVolumes(t *testing.T) {
 	src := corpus.Open(t)
 	cases := []struct {
 		file   string
@@ -107,7 +107,7 @@ func TestParseRimWorldVolumes(t *testing.T) {
 	}
 }
 
-func TestRimWorldPipelineInventory(t *testing.T) {
+func TestPipelineInventory(t *testing.T) {
 	src := corpus.Open(t)
 	seen := map[string]Algo{}
 	for p, err := range lewpath.New(".").IterDir(src) {
