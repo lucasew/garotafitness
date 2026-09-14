@@ -7,9 +7,9 @@ import (
 	"io"
 	"testing"
 
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/delta"
 	"github.com/lucasew/garotafitness/stream/dispack"
-	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/stream/srep"
 )
 

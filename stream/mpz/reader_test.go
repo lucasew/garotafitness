@@ -9,8 +9,8 @@ import (
 	"os"
 	"testing"
 
-	"github.com/lucasew/garotafitness/stream/fourx4"
 	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/lucasew/garotafitness/stream/fourx4"
 	"github.com/lucasew/garotafitness/stream/srep"
 )
 
