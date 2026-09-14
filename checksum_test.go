@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParseMD5(t *testing.T) {
@@ -14,15 +16,9 @@ func TestParseMD5(t *testing.T) {
 		"2c2800d798bcb735b1a92fdfc41f0443 *..\\fg-01.bin\n" +
 		"b8756dfec9afb91b21e8a209f0e0a4fa *..\\fg-optional-bonus-soundtrack.bin\n"
 	got, err := parseMD5(strings.NewReader(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got["fg-01.bin"] != "2c2800d798bcb735b1a92fdfc41f0443" {
-		t.Fatalf("got %#v", got)
-	}
-	if _, ok := got["fg-optional-bonus-soundtrack.bin"]; !ok {
-		t.Fatal("missing optional")
-	}
+	require.NoError(t, err)
+	require.Equal(t, "2c2800d798bcb735b1a92fdfc41f0443", got["fg-01.bin"])
+	require.Contains(t, got, "fg-optional-bonus-soundtrack.bin")
 }
 
 func TestVerifyChecksumsSkipMissingOptional(t *testing.T) {
@@ -38,12 +34,8 @@ func TestVerifyChecksumsSkipMissingOptional(t *testing.T) {
 		)},
 	}
 	vols, err := listVolumes(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyChecksums(src, vols); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	require.NoError(t, verifyChecksums(src, vols, nil))
 }
 
 func TestVerifyChecksumsMismatch(t *testing.T) {
@@ -53,10 +45,6 @@ func TestVerifyChecksumsMismatch(t *testing.T) {
 		"MD5/fitgirl-bins.md5": {Data: []byte("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa *..\\fg-01.bin\n")},
 	}
 	vols, err := listVolumes(src)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := verifyChecksums(src, vols); err == nil {
-		t.Fatal("want mismatch")
-	}
+	require.NoError(t, err)
+	require.ErrorContains(t, verifyChecksums(src, vols, nil), "mismatch")
 }

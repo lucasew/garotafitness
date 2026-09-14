@@ -2,26 +2,26 @@ package garotafitness
 
 import (
 	"io"
-	"os"
-	"path/filepath"
 	"testing"
 
+	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/test"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMemberPathRejectsEscape(t *testing.T) {
 	t.Parallel()
-	root := t.TempDir()
 	for _, name := range []string{"../x", "/etc/passwd", ""} {
-		_, err := memberPath(root, name)
+		_, err := memberName(name)
 		require.Error(t, err, "accepted %q", name)
 	}
 }
 
 func TestDirDestCreateAndOverwrite(t *testing.T) {
 	t.Parallel()
-	d, err := OpenDirDest(filepath.Join(t.TempDir(), "out"))
+	d, err := OpenDirDest(t.TempDir())
 	require.NoError(t, err)
+	test.CloseOnCleanup(t, d)
 	w, err := d.Create("a/b.txt")
 	require.NoError(t, err)
 	_, err = io.WriteString(w, "one")
@@ -32,7 +32,7 @@ func TestDirDestCreateAndOverwrite(t *testing.T) {
 	_, err = io.WriteString(w, "two")
 	require.NoError(t, err)
 	require.NoError(t, w.Close())
-	got, err := os.ReadFile(filepath.Join(d.Root, "a", "b.txt"))
+	got, err := lewpath.New("a/b.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "two", string(got))
 	_, err = d.Create("../escape")

@@ -5,8 +5,9 @@ import (
 	"encoding/binary"
 	"hash/crc32"
 	"io"
-	"os"
 	"testing"
+
+	"github.com/lucasew/garotafitness/internal/corpus"
 )
 
 func framed(b []byte) []byte {
@@ -75,14 +76,7 @@ func TestIndexIntegerAcrossFrames(t *testing.T) {
 }
 
 func TestRimWorldArchiveFrames(t *testing.T) {
-	f, err := os.Open(rimworld + "/fg-05.bin")
-	if os.IsNotExist(err) {
-		t.Skip("corpus not mounted")
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer f.Close()
+	f := corpus.File(t, "fg-05.bin")
 	if _, err := f.Seek(31, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

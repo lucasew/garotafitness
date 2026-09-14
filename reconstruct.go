@@ -10,10 +10,10 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"path"
 	"slices"
 	"strings"
 
+	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -25,7 +25,7 @@ type reconstruction struct {
 }
 
 func (s *reconstruction) MkdirAll(name string, mode fs.FileMode) error {
-	if _, err := memberPath(".", name); err != nil {
+	if _, err := memberName(name); err != nil {
 		return err
 	}
 	s.dirs[name] = mode
@@ -33,7 +33,7 @@ func (s *reconstruction) MkdirAll(name string, mode fs.FileMode) error {
 }
 
 func (s *reconstruction) Create(name string) (io.WriteCloser, error) {
-	if _, err := memberPath(".", name); err != nil {
+	if _, err := memberName(name); err != nil {
 		return nil, err
 	}
 	return &stagedFile{store: s, name: name}, nil
@@ -103,7 +103,7 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 		slog.Info("verify installed checksums", "manifest", manifestPath)
-		if err := s.verifyInstalled(ctx, string(manifest), path.Dir(manifestPath)); err != nil {
+		if err := s.verifyInstalled(ctx, string(manifest), lewpath.New(manifestPath).Parent().String()); err != nil {
 			return err
 		}
 	}
@@ -143,10 +143,10 @@ func (s *reconstruction) verifyInstalled(ctx context.Context, manifest, director
 			return err
 		}
 		line := strings.TrimSuffix(sc.Text(), "\r")
-		if len(line) < 35 || line[32:34] != " *" {
+		if len(line) < 35 || line[32] != ' ' || (line[33] != '*' && line[33] != ' ') {
 			return fmt.Errorf("installed checksum: invalid manifest line")
 		}
-		resolved, err := virtualPath(line[34:], path.Join("app", directory))
+		resolved, err := virtualPath(line[34:], lewpath.New("app", directory).String())
 		if err != nil {
 			return fmt.Errorf("installed checksum: %w", err)
 		}

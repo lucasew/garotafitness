@@ -3,14 +3,12 @@ package setupdata
 import (
 	"bytes"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/lucasew/garotafitness/internal/corpus"
 	ulzma "github.com/ulikunitz/xz/lzma"
 )
-
-const rimworldSetup = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/setup.exe`
 
 func TestScanNil(t *testing.T) {
 	t.Parallel()
@@ -58,11 +56,7 @@ func TestScanZLB(t *testing.T) {
 
 func TestScanCorpus(t *testing.T) {
 	t.Parallel()
-	f, err := os.Open(rimworldSetup)
-	if err != nil {
-		t.Skip("corpus not mounted")
-	}
-	t.Cleanup(func() { f.Close() })
+	f := corpus.File(t, "setup.exe")
 	info, err := Scan(f)
 	if err != nil {
 		t.Fatal(err)

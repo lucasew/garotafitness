@@ -10,10 +10,9 @@ import (
 	"testing"
 
 	"github.com/lucasew/garotafitness/fourx4"
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/srep"
 )
-
-const optionalOST = `/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-optional-bonus-soundtrack.bin`
 
 // First member in the optional solid (FreeArc custom CRC32).
 const (
@@ -93,11 +92,7 @@ func TestFourx4Inner(t *testing.T) {
 
 func TestOptionalOST(t *testing.T) {
 	t.Parallel()
-	f, err := os.Open(optionalOST)
-	if err != nil {
-		t.Skip("corpus not mounted")
-	}
-	t.Cleanup(func() { f.Close() })
+	f := corpus.File(t, "fg-optional-bonus-soundtrack.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
@@ -141,11 +136,7 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 		t.Skip("set GAROTAFITNESS_CORPUS_TESTS=1 for the full MPZ block check")
 	}
 	t.Parallel()
-	f, err := os.Open(optionalOST)
-	if err != nil {
-		t.Skip("corpus not mounted")
-	}
-	t.Cleanup(func() { f.Close() })
+	f := corpus.File(t, "fg-optional-bonus-soundtrack.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

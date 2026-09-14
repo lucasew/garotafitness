@@ -3,27 +3,18 @@ package setupdata
 import (
 	"bytes"
 	"encoding/binary"
-	"os"
-	"strings"
 	"testing"
+
+	"github.com/lucasew/garotafitness/internal/corpus"
+	"github.com/stretchr/testify/require"
 )
 
 func TestSetupReconstructionPlan(t *testing.T) {
-	f, err := os.Open(rimworldSetup)
-	if err != nil {
-		t.Skip("corpus not mounted")
-	}
-	defer f.Close()
+	f := corpus.File(t, "setup.exe")
 	info, err := Scan(f)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(info.Operations) == 0 {
-		t.Fatal("missing installer reconstruction metadata")
-	}
-	if info.ManifestPath == "" {
-		t.Fatal("missing checksum destination metadata")
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, info.Operations, "installer reconstruction metadata")
+	require.NotEmpty(t, info.ManifestPath, "checksum destination metadata")
 	archives := 0
 	filtered := 0
 	optional := 0
@@ -38,9 +29,9 @@ func TestSetupReconstructionPlan(t *testing.T) {
 			}
 		}
 	}
-	if archives != 9 || filtered != 2 || optional != 1 {
-		t.Fatalf("archives=%d filtered=%d optional=%d", archives, filtered, optional)
-	}
+	require.Equal(t, 9, archives)
+	require.Equal(t, 2, filtered)
+	require.Equal(t, 1, optional)
 }
 
 func fixtureIFPS(source string, unknown bool) []byte {
@@ -106,21 +97,15 @@ func TestPlanUsesEncodedNames(t *testing.T) {
 	for _, name := range []string{"fg-content.bin", "fg-other-language.bin"} {
 		b := fixtureIFPS("{src}\\"+name, false)
 		plan, err := reconstructionPlan(b)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(plan) != 1 || plan[0].Source != "{src}\\"+name || plan[0].Dest != "{app}\\Game Assets" || plan[0].Filter != "payload" || !plan[0].Optional {
-			t.Fatalf("%+v", plan)
-		}
+		require.NoError(t, err)
+		require.Equal(t, []Operation{{Kind: "extract", Source: "{src}\\" + name, Dest: "{app}\\Game Assets", Filter: "payload", Optional: true}}, plan)
 		for n := 0; n < len(b); n++ {
-			if _, err := reconstructionPlan(b[:n]); err == nil {
-				t.Fatalf("accepted truncation at %d", n)
-			}
+			_, err := reconstructionPlan(b[:n])
+			require.Error(t, err, "accepted truncation at %d", n)
 		}
 	}
-	if _, err := reconstructionPlan(fixtureIFPS("unused", true)); err == nil || !strings.Contains(err.Error(), "unresolved") {
-		t.Fatalf("accepted unknown source: %v", err)
-	}
+	_, err := reconstructionPlan(fixtureIFPS("unused", true))
+	require.ErrorContains(t, err, "unresolved")
 }
 
 func TestManifestDestinationFraming(t *testing.T) {
@@ -130,11 +115,7 @@ func TestManifestDestinationFraming(t *testing.T) {
 	}
 	data := binary.LittleEndian.AppendUint32(nil, uint32(len(b)))
 	data = append(data, b...)
-	if got := installedManifestPath(data); got != "{app}\\Checks\\files.md5" {
-		t.Fatal(got)
-	}
+	require.Equal(t, "{app}\\Checks\\files.md5", installedManifestPath(data))
 	data[0]++
-	if got := installedManifestPath(data); got != "" {
-		t.Fatalf("accepted invalid field framing: %s", got)
-	}
+	require.Empty(t, installedManifestPath(data), "invalid field framing")
 }

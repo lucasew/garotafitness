@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/lucasew/garotafitness/setupdata"
+	"github.com/stretchr/testify/require"
 	"github.com/ulikunitz/xz/lzma"
 )
 
@@ -44,25 +45,18 @@ func TestRecipeDrivenReconstruction(t *testing.T) {
 				{Kind: "command", Program: "{tmp}\\engine\\build.bat", WorkDir: "{app}\\scratch"},
 				{Kind: "command", Program: "{cmd}", Args: "/C call \"{tmp}\\relocate.bat\"", WorkDir: "{app}"},
 			}
-			if err := p.run(t.Context(), ops); err != nil {
-				t.Fatal(err)
-			}
-			if len(p.app.files) != count {
-				t.Fatalf("unexpected files: %v", sortedKeys(p.app.files))
-			}
+			require.NoError(t, p.run(t.Context(), ops))
+			require.Len(t, p.app.files, count)
 			for i := range count {
 				b := p.app.files[fmt.Sprintf("Assets/chapter-%d.dat", i)]
-				if len(b) < 13 || b[0] != (1*5+1)*9+2 || binary.LittleEndian.Uint32(b[1:]) != 1<<16 {
-					t.Fatalf("recipe parameters ignored: %x", b)
-				}
+				require.GreaterOrEqual(t, len(b), 13)
+				require.Equal(t, byte((1*5+1)*9+2), b[0], "LZMA properties from recipe")
+				require.Equal(t, uint32(1<<16), binary.LittleEndian.Uint32(b[1:]), "LZMA dictionary from recipe")
 				r, err := lzma.NewReader(bytes.NewReader(b))
-				if err != nil {
-					t.Fatal(err)
-				}
+				require.NoError(t, err)
 				got, err := io.ReadAll(r)
-				if err != nil || string(got) != "after" {
-					t.Fatalf("%q %v", got, err)
-				}
+				require.NoError(t, err)
+				require.Equal(t, "after", string(got))
 			}
 		})
 	}
@@ -71,35 +65,22 @@ func TestRecipeDrivenReconstruction(t *testing.T) {
 func TestRecipeReplacementsAndManifestAppend(t *testing.T) {
 	p := testPlan()
 	p.temp.files["tasks/list.txt"] = []byte("ROOT\\payload")
-	if err := p.command(t.Context(), "{tmp}\\fart.exe", "-w *.txt ROOT \"{app}\"", "tmp/tasks", 0); err != nil {
-		t.Fatal(err)
-	}
-	if got := string(p.temp.files["tasks/list.txt"]); got != "{app}\\payload" {
-		t.Fatal(got)
-	}
+	require.NoError(t, p.command(t.Context(), "{tmp}\\fart.exe", "-w *.txt ROOT \"{app}\"", "tmp/tasks", 0))
+	require.Equal(t, "{app}\\payload", string(p.temp.files["tasks/list.txt"]))
 	p.app.files["Verify/base.md5"] = []byte("first\n")
 	p.app.files["Verify/extra.addon"] = []byte("second\n")
-	if err := p.command(t.Context(), "{cmd}", "/C \"copy /b base.md5+*.addon&&del *.addon\"", "app/Verify", 0); err != nil {
-		t.Fatal(err)
-	}
-	if string(p.app.files["Verify/base.md5"]) != "first\nsecond\n" {
-		t.Fatal(p.app.files)
-	}
-	if _, ok := p.app.files["Verify/extra.addon"]; ok {
-		t.Fatal("addon remains")
-	}
+	require.NoError(t, p.command(t.Context(), "{cmd}", "/C \"copy /b base.md5+*.addon&&del *.addon\"", "app/Verify", 0))
+	require.Equal(t, "first\nsecond\n", string(p.app.files["Verify/base.md5"]))
+	require.NotContains(t, p.app.files, "Verify/extra.addon")
 }
 
 func TestRecipeRejectsUnknownProgramsAndEscapes(t *testing.T) {
 	for _, line := range []string{"unknown.exe input output", "del ../../escape", "del {src}\\fg-01.bin", "echo harmless | unknown.exe", "move missing destination"} {
 		p := testPlan()
-		if err := p.recipe(t.Context(), line, "app", 0); err == nil {
-			t.Fatalf("accepted %q", line)
-		}
+		require.Error(t, p.recipe(t.Context(), line, "app", 0), "accepted %q", line)
 	}
 	for _, name := range []string{"{app}\\..\\src\\source.bin", "{tmp}\\..\\app\\file", "/etc/passwd", "C:\\escape"} {
-		if _, err := virtualPath(name, ""); err == nil {
-			t.Fatalf("accepted %q", name)
-		}
+		_, err := virtualPath(name, "")
+		require.Error(t, err, "accepted %q", name)
 	}
 }

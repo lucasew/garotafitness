@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"io"
-	"os"
 	"testing"
+
+	"github.com/lucasew/garotafitness/internal/corpus"
 )
 
 var futureLZHead = []byte{
@@ -53,11 +54,7 @@ func TestNewReaderLiterals(t *testing.T) {
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
-	f, err := os.Open("/media/downloads/TORRENTS/RimWorld [FitGirl Repack]/fg-01.bin")
-	if err != nil {
-		t.Skip("corpus not mounted")
-	}
-	t.Cleanup(func() { f.Close() })
+	f := corpus.File(t, "fg-01.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

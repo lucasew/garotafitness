@@ -8,14 +8,15 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"path"
 	"strings"
+
+	lewpath "github.com/lewtec/lewkit/x/path"
 )
 
 const checksumName = "MD5/fitgirl-bins.md5"
 
-func verifyChecksums(src fs.FS, vols []Volume) error {
-	f, err := src.Open(checksumName)
+func verifyChecksums(src fs.FS, vols []Volume, optional map[string]bool) error {
+	f, err := lewpath.New(checksumName).Open(src)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
@@ -30,12 +31,16 @@ func verifyChecksums(src fs.FS, vols []Volume) error {
 	}
 	have := make(map[string]Volume, len(vols))
 	for _, v := range vols {
-		have[path.Base(v.Name)] = v
+		have[lewpath.New(v.Name).Name()] = v
 	}
 	for file, sum := range want {
 		v, ok := have[file]
 		if !ok {
-			if strings.Contains(strings.ToLower(file), optionalMark) {
+			flag, known := optional[file]
+			if !known {
+				flag = strings.Contains(strings.ToLower(file), optionalMark)
+			}
+			if flag {
 				continue
 			}
 			return fmt.Errorf("checksum: missing %s", file)
@@ -68,7 +73,7 @@ func parseMD5(r io.Reader) (map[string]string, error) {
 		}
 		name := strings.TrimSpace(rest)
 		name = strings.TrimPrefix(name, "*")
-		name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+		name = lewpath.New(strings.ReplaceAll(name, "\\", "/")).Name()
 		out[name] = strings.ToLower(sum)
 	}
 	if err := sc.Err(); err != nil {
@@ -78,7 +83,7 @@ func parseMD5(r io.Reader) (map[string]string, error) {
 }
 
 func hashFile(src fs.FS, name string) (string, error) {
-	f, err := src.Open(name)
+	f, err := lewpath.New(name).Open(src)
 	if err != nil {
 		return "", fmt.Errorf("checksum open %s: %w", name, err)
 	}

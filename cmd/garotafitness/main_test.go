@@ -17,9 +17,11 @@ func TestParseExtract(t *testing.T) {
 	require.NotNil(t, app.Args.Extract)
 	require.Error(t, app.Args.Extract.Run(t.Context()))
 
-	app, err = cmd.Parse[cmd.App[root]]("extract", "/src", "/dst")
+	src := t.TempDir()
+	dst := t.TempDir()
+	app, err = cmd.Parse[cmd.App[root]]("extract", src, dst)
 	require.NoError(t, err)
 	require.NotNil(t, app.Args.Extract)
-	require.Equal(t, "/src", app.Args.Extract.Source.Value())
-	require.Equal(t, "/dst", app.Args.Extract.Dest.Value())
+	require.Equal(t, src, app.Args.Extract.Source.Value())
+	require.Equal(t, dst, app.Args.Extract.Dest.Value())
 }
