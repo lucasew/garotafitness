@@ -14,8 +14,9 @@ on:
       new_version:
         description: 'New tag version'
         type: choice
-        default: 'patch'
+        default: 'next'
         options:
+          - next
           - patch
           - minor
           - major
