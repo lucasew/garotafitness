@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/lucasew/garotafitness/lzma"
+	"github.com/lucasew/garotafitness/stream/lzma"
 )
 
 // rawLZMA1 decodes a FreeArc lzma:mfbt4:d1m block (no .lzma header on disk).

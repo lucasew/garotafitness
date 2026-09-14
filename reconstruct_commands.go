@@ -9,12 +9,12 @@ import (
 	"strings"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
-	"github.com/lucasew/garotafitness/fgpack"
-	"github.com/lucasew/garotafitness/fsb"
-	"github.com/lucasew/garotafitness/x2"
-	"github.com/lucasew/garotafitness/x3"
-	"github.com/lucasew/garotafitness/x5"
-	"github.com/lucasew/garotafitness/xdelta"
+	"github.com/lucasew/garotafitness/reconstruct/fgpack"
+	"github.com/lucasew/garotafitness/reconstruct/fsb"
+	"github.com/lucasew/garotafitness/reconstruct/x2"
+	"github.com/lucasew/garotafitness/reconstruct/x3"
+	"github.com/lucasew/garotafitness/reconstruct/x5"
+	"github.com/lucasew/garotafitness/reconstruct/xdelta"
 )
 
 // Recipe commands are parsed into a fixed set of file transformations. Nothing

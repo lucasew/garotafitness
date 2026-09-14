@@ -7,10 +7,10 @@ import (
 	"io"
 	"testing"
 
-	"github.com/lucasew/garotafitness/delta"
-	"github.com/lucasew/garotafitness/dispack"
+	"github.com/lucasew/garotafitness/stream/delta"
+	"github.com/lucasew/garotafitness/stream/dispack"
 	"github.com/lucasew/garotafitness/internal/corpus"
-	"github.com/lucasew/garotafitness/srep"
+	"github.com/lucasew/garotafitness/stream/srep"
 )
 
 // fg-03.bin solid at 0x1F (rzwb). fg-04 4x4 inner packet is size+CM(.

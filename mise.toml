@@ -46,11 +46,11 @@ depends = ["test:*"]
 
 [tasks."build:srep"]
 description = "Build SREP guest wasm with conda emscripten"
-run = "make -C srep"
+run = "make -C stream/srep"
 
 [tasks."build:reconstruction"]
 description = "Build the reconstruction and soundtrack WASM modules"
-run = "make -C fsb && make -C x5 && make -C fgpack && make -C xdelta && make -C mpz"
+run = "make -C reconstruct/fsb && make -C reconstruct/x5 && make -C reconstruct/fgpack && make -C reconstruct/xdelta && make -C stream/mpz"
 
 [tasks."build:garotafitness"]
 description = "Build garotafitness into bin/"

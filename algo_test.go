@@ -16,6 +16,8 @@ func TestParseAlgo(t *testing.T) {
 		{"mpzz", AlgoMPZZ},
 		{"dispack070", AlgoDispack},
 		{"rzwb", AlgoRZW},
+		{"x2", AlgoInvalid},
+		{"fgpack", AlgoInvalid},
 		{"nope", AlgoInvalid},
 		{"", AlgoInvalid},
 	}

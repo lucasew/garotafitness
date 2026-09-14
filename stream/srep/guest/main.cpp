@@ -5,7 +5,7 @@
 
 #include "kernel.h"
 
-#include "../../third_party/srep/Compression/SREP/decompress.cpp"
+#include "../../../third_party/srep/Compression/SREP/decompress.cpp"
 
 namespace {
 
