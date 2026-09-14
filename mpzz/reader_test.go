@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/srep"
 )
 
@@ -22,7 +23,7 @@ var fg01Head = []byte{
 const (
 	fg01InnerSize = 255994514
 	fg01InnerCRC  = 0xf7a300d7
-	fg01SolidOff = 0x1F
+	fg01SolidOff  = 0x1F
 )
 
 func TestNewReader(t *testing.T) {
@@ -96,7 +97,7 @@ func TestHeaderHex(t *testing.T) {
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
-	f := openCorpusFile(t, "fg-01.bin")
+	f := corpus.File(t, "fg-01.bin")
 	if _, err := f.Seek(fg01SolidOff, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

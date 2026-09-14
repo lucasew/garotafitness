@@ -8,6 +8,7 @@ import (
 	"os/signal"
 
 	"github.com/lewtec/lewkit/x/cmd"
+	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness"
 )
 
@@ -31,8 +32,8 @@ func (*root) Run(context.Context) error {
 }
 
 type extractCmd struct {
-	Source garotafitness.SourceArg `help:"directory with setup.exe and fg-*.bin volumes"`
-	Dest   garotafitness.DestArg   `help:"destination directory (created if missing)"`
+	Source cmd.DataDirArg `help:"directory with setup.exe and fg-*.bin volumes"`
+	Dest   cmd.StringArg  `help:"destination directory (created if missing)"`
 }
 
 func (extractCmd) Description() string {
@@ -40,13 +41,21 @@ func (extractCmd) Description() string {
 }
 
 func (c *extractCmd) Run(ctx context.Context) error {
-	src := c.Source.Value()
-	dst := c.Dest.Value()
-	if src == nil || dst.Name() == "" {
+	srcPath := c.Source.Value()
+	dstPath := c.Dest.Value()
+	if srcPath == "" || dstPath == "" {
 		return fmt.Errorf("usage: garotafitness extract SOURCE DEST")
 	}
-	defer c.Source.Close()
-	defer c.Dest.Close()
+	src, err := lewpath.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := garotafitness.OpenDirDest(dstPath)
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
 	slog.Info("extract", "source", src.Name(), "dest", dst.Name())
 	return garotafitness.Extractor{Source: src, Dest: dst}.Extract(ctx)
 }

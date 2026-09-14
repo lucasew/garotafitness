@@ -12,6 +12,7 @@ import (
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/test"
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/stretchr/testify/require"
 )
 
@@ -46,7 +47,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 	if mode != "all" && mode != "required" {
 		t.Fatal("GAROTAFITNESS_FULL_EXTRACT must be all or required")
 	}
-	var source fs.FS = openCorpus(t)
+	var source fs.FS = corpus.Open(t)
 	if ok, err := lewpath.New("setup.exe").Exists(source); err != nil || !ok {
 		t.Skip("corpus not mounted")
 	}

@@ -5,11 +5,12 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSetupReconstructionPlan(t *testing.T) {
-	f := openCorpusFile(t, "setup.exe")
+	f := corpus.File(t, "setup.exe")
 	info, err := Scan(f)
 	require.NoError(t, err)
 	require.NotEmpty(t, info.Operations, "installer reconstruction metadata")

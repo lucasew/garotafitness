@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lucasew/garotafitness/internal/corpus"
 )
 
 func TestArchiveDescriptorCRC(t *testing.T) {
@@ -40,7 +41,7 @@ func TestArchiveDescriptorCRC(t *testing.T) {
 }
 
 func TestExtractRimWorldDecodedVolumes(t *testing.T) {
-	src := openCorpus(t)
+	src := corpus.Open(t)
 	for _, name := range []string{"fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin", "fg-05.bin", "fg-06.bin"} {
 		t.Run(name, func(t *testing.T) {
 			ok, err := lewpath.New(name).Exists(src)
@@ -66,7 +67,7 @@ func TestPackedRoundTripSmall(t *testing.T) {
 }
 
 func TestParseRimWorldVolumes(t *testing.T) {
-	src := openCorpus(t)
+	src := corpus.Open(t)
 	cases := []struct {
 		file   string
 		member string
@@ -107,7 +108,7 @@ func TestParseRimWorldVolumes(t *testing.T) {
 }
 
 func TestRimWorldPipelineInventory(t *testing.T) {
-	src := openCorpus(t)
+	src := corpus.Open(t)
 	seen := map[string]Algo{}
 	for p, err := range lewpath.New(".").IterDir(src) {
 		if err != nil {

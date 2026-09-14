@@ -6,6 +6,8 @@ import (
 	"hash/crc32"
 	"io"
 	"testing"
+
+	"github.com/lucasew/garotafitness/internal/corpus"
 )
 
 func framed(b []byte) []byte {
@@ -74,7 +76,7 @@ func TestIndexIntegerAcrossFrames(t *testing.T) {
 }
 
 func TestRimWorldArchiveFrames(t *testing.T) {
-	f := openCorpusFile(t, "fg-05.bin")
+	f := corpus.File(t, "fg-05.bin")
 	if _, err := f.Seek(31, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

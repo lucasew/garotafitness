@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"io"
 	"testing"
+
+	"github.com/lucasew/garotafitness/internal/corpus"
 )
 
 var futureLZHead = []byte{
@@ -52,7 +54,7 @@ func TestNewReaderLiterals(t *testing.T) {
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
-	f := openCorpusFile(t, "fg-01.bin")
+	f := corpus.File(t, "fg-01.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

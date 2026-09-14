@@ -9,6 +9,7 @@ import (
 
 	"github.com/lucasew/garotafitness/delta"
 	"github.com/lucasew/garotafitness/dispack"
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/srep"
 )
 
@@ -106,7 +107,7 @@ func TestNewReaderVersion(t *testing.T) {
 
 func TestNewReaderCorpus(t *testing.T) {
 	t.Parallel()
-	f := openCorpusFile(t, "fg-03.bin")
+	f := corpus.File(t, "fg-03.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +127,7 @@ func TestNewReaderCorpus(t *testing.T) {
 
 func TestFG05Header(t *testing.T) {
 	t.Parallel()
-	f := openCorpusFile(t, "fg-05.bin")
+	f := corpus.File(t, "fg-05.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
@@ -154,7 +155,7 @@ func TestFG05Header(t *testing.T) {
 
 func TestFG05Pipeline(t *testing.T) {
 	t.Parallel()
-	raw := readCorpusFile(t, "fg-05.bin")
+	raw := corpus.ReadFile(t, "fg-05.bin")
 	solid, err := NewReader(bytes.NewReader(raw[31:]))
 	if err != nil {
 		t.Fatal(err)

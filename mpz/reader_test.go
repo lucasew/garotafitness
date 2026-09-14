@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/lucasew/garotafitness/fourx4"
+	"github.com/lucasew/garotafitness/internal/corpus"
 	"github.com/lucasew/garotafitness/srep"
 )
 
@@ -91,7 +92,7 @@ func TestFourx4Inner(t *testing.T) {
 
 func TestOptionalOST(t *testing.T) {
 	t.Parallel()
-	f := openCorpusFile(t, "fg-optional-bonus-soundtrack.bin")
+	f := corpus.File(t, "fg-optional-bonus-soundtrack.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 		t.Skip("set GAROTAFITNESS_CORPUS_TESTS=1 for the full MPZ block check")
 	}
 	t.Parallel()
-	f := openCorpusFile(t, "fg-optional-bonus-soundtrack.bin")
+	f := corpus.File(t, "fg-optional-bonus-soundtrack.bin")
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

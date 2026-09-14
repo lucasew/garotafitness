@@ -6,10 +6,12 @@ import (
 	"encoding/hex"
 	"io"
 	"testing"
+
+	"github.com/lucasew/garotafitness/internal/corpus"
 )
 
 func TestFG06(t *testing.T) {
-	f := openCorpusFile(t, "fg-06.bin")
+	f := corpus.File(t, "fg-06.bin")
 	if _, err := f.Seek(31, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}

@@ -46,51 +46,6 @@ func (d DirDest) Open(name string) (fs.File, error) {
 	return d.fs.Open(name)
 }
 
-// SourceArg opens an existing directory as an [lewpath.Root].
-type SourceArg struct {
-	root *lewpath.Root
-}
-
-func (a *SourceArg) Parse(arg string) error {
-	r, err := lewpath.Open(arg)
-	if err != nil {
-		return fmt.Errorf("source: %w", err)
-	}
-	if a.root != nil {
-		a.root.Close()
-	}
-	a.root = r
-	return nil
-}
-
-func (a SourceArg) Value() *lewpath.Root { return a.root }
-
-func (a SourceArg) Close() error {
-	if a.root == nil {
-		return nil
-	}
-	return a.root.Close()
-}
-
-// DestArg creates a directory if needed and opens it as a [DirDest].
-type DestArg struct {
-	DirDest
-}
-
-func (a *DestArg) Parse(arg string) error {
-	d, err := OpenDirDest(arg)
-	if err != nil {
-		return err
-	}
-	if a.fs != nil {
-		a.fs.Close()
-	}
-	a.DirDest = d
-	return nil
-}
-
-func (a DestArg) Value() DirDest { return a.DirDest }
-
 func (d DirDest) Close() error {
 	if d.fs == nil {
 		return nil

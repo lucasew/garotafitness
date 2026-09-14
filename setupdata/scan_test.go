@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lucasew/garotafitness/internal/corpus"
 	ulzma "github.com/ulikunitz/xz/lzma"
 )
 
@@ -55,7 +56,7 @@ func TestScanZLB(t *testing.T) {
 
 func TestScanCorpus(t *testing.T) {
 	t.Parallel()
-	f := openCorpusFile(t, "setup.exe")
+	f := corpus.File(t, "setup.exe")
 	info, err := Scan(f)
 	if err != nil {
 		t.Fatal(err)
