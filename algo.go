@@ -13,6 +13,7 @@ const (
 	AlgoSREP
 	Algo4x4
 	AlgoRZW
+	AlgoRZS
 	AlgoMagic2
 	AlgoMPZZ
 	AlgoMPZ
@@ -31,6 +32,7 @@ var algoName = [...]string{
 	AlgoSREP:    "srep",
 	Algo4x4:     "4x4",
 	AlgoRZW:     "rzw",
+	AlgoRZS:     "rzs",
 	AlgoMagic2:  "magic2",
 	AlgoMPZZ:    "mpzz",
 	AlgoMPZ:     "mpz",
@@ -49,6 +51,7 @@ var algoByName = map[string]Algo{
 	"4x4":        Algo4x4,
 	"rzw":        AlgoRZW,
 	"rzwb":       AlgoRZW,
+	"rzs":        AlgoRZS,
 	"magic2":     AlgoMagic2,
 	"mpzz":       AlgoMPZZ,
 	"mpz":        AlgoMPZ,

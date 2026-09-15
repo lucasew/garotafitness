@@ -51,6 +51,7 @@ var known = []string{
 	"srep",
 	"mpzz",
 	"rzwb",
+	"rzs",
 	"lzma",
 	"delta",
 	"4x4",

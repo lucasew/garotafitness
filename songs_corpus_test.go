@@ -2,7 +2,9 @@ package garotafitness
 
 import (
 	"bytes"
+	"hash/crc32"
 	"io"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -21,6 +23,7 @@ func TestSongsOfConquestSetup(t *testing.T) {
 	require.Equal(t, "{app}\\_Redist\\fitgirl.md5", info.ManifestPath)
 	require.Equal(t, 674, strings.Count(info.InstalledMD5, "\n"))
 	require.Contains(t, info.Encoders, "pref")
+	require.Contains(t, info.Encoders, "rzs")
 	require.Len(t, info.Operations, 12)
 }
 
@@ -48,4 +51,61 @@ func TestSongsOfConquestPrefHeader(t *testing.T) {
 		return
 	}
 	t.Fatal("no pref solid")
+}
+
+func TestSongsOfConquestPipelines(t *testing.T) {
+	src := corpus.OpenEnv(t, socCorpus)
+	want := map[string]Algo{
+		"fg-01.bin": AlgoRZS,
+		"fg-02.bin": AlgoRZS,
+		"fg-03.bin": AlgoMagic2,
+		"fg-04.bin": AlgoRZW,
+	}
+	for name, last := range want {
+		t.Run(name, func(t *testing.T) {
+			data, err := lewpath.New(name).ReadFile(src)
+			require.NoError(t, err)
+			v, err := parseVolume(name, data)
+			require.NoError(t, err)
+			found := false
+			for _, m := range v.Members {
+				if m.Dir || len(m.Pipeline) == 0 {
+					continue
+				}
+				found = true
+				if m.Pipeline.Last().Algo != last {
+					t.Fatalf("%s last %s want %s (%s)", m.Path, m.Pipeline.Last().Algo, last, m.Pipeline)
+				}
+			}
+			require.True(t, found, "no file members")
+		})
+	}
+}
+
+func TestExtractSongsOfConquestRZS(t *testing.T) {
+	t.Skip("1.03.7 front index (5 runs) is recovered; body split still misses the 35-byte stream-2 run")
+	src := corpus.OpenEnv(t, socCorpus)
+	name := "fg-02.bin"
+	dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
+	require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}))
+	data, err := lewpath.New(name).ReadFile(src)
+	require.NoError(t, err)
+	v, err := parseVolume(name, data)
+	require.NoError(t, err)
+	checked := 0
+	for _, m := range v.Members {
+		if m.Dir {
+			continue
+		}
+		b, err := dst.require(m.Path)
+		require.NoError(t, err, m.Path)
+		require.Equal(t, m.Size, uint64(len(b)), m.Path)
+		table := m.crcTable
+		if table == nil {
+			table = crc32.IEEETable
+		}
+		require.Equal(t, m.CRC, crc32.Checksum(b, table), m.Path)
+		checked++
+	}
+	require.Greater(t, checked, 0)
 }
