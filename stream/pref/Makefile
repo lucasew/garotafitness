@@ -57,7 +57,7 @@ INCLUDES = -I$(PRECOMP) -Iguest \
 DEFS = -DPRECOMPDLL -DBUILD_LIB -DHAVE_BOOL -D__unix
 SRCS = $(GIF_SRC) $(BZIP_SRC) $(ZLIB_SRC) $(PACKARI_SRC) $(PACKJPG_SRC) $(PACKMP3_SRC) \
 	$(LZMA_SRC) $(BRUNSLI_SRC) $(BROTLI_SRC) $(PREFLATE_SRC) \
-	$(PRECOMP)/precomp.cpp guest/main.cpp guest/task_pool.cpp guest/otf_stub.cpp
+	$(PRECOMP)/precomp.cpp guest/main.cpp guest/memfs.c guest/task_pool.cpp guest/otf_stub.cpp
 
 .PHONY: guest clean
 guest: $(GUEST)
@@ -82,7 +82,7 @@ $(GUEST): $(SRCS) guest/dlldecl.h guest/support/task_pool.h guest/otf_stub.cpp $
 		-sINITIAL_MEMORY=67108864 \
 		-sMAXIMUM_MEMORY=2147483648 \
 		-sSTACK_SIZE=2097152 \
-		-sEXPORTED_FUNCTIONS=_pref_restore,_malloc,_free \
+		-sEXPORTED_FUNCTIONS=_pref_restore,_pref_out_ptr,_pref_out_len,_malloc,_free \
 		-Wno-version-check -Wno-deprecated-declarations \
 		-o $(GUEST)
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -61,5 +62,18 @@ func TestRoundTrip(t *testing.T) {
 	}
 	if !bytes.Equal(got, plain) {
 		t.Fatalf("got %d bytes %q; want %d %q", len(got), got, len(plain), plain)
+	}
+}
+
+func TestInstantiateGuest(t *testing.T) {
+	if len(guestWASM) < 8 {
+		t.Skip("no wasm")
+	}
+	_, err := NewReader(bytes.NewReader([]byte("PCF\x00\x04\x08\x00")))
+	if err == nil {
+		return
+	}
+	if strings.Contains(err.Error(), "is not exported") {
+		t.Fatal(err)
 	}
 }
