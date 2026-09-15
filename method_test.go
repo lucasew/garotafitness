@@ -29,6 +29,9 @@ func TestParseAlgoAliases(t *testing.T) {
 	if ParseAlgo("rzwb") != AlgoRZW {
 		t.Fatal("rzw")
 	}
+	if ParseAlgo("pref") != AlgoPref {
+		t.Fatal("pref")
+	}
 	if ParseAlgo("nope").Known() {
 		t.Fatal("want invalid")
 	}

@@ -36,15 +36,18 @@ the compilers in `mise.toml` and run `mise run build:reconstruction`. The MPZ
 translation is documented in [stream/mpz/guest/README.md](stream/mpz/guest/README.md), and the
 RTPatch format in [reconstruct/x3/README.md](reconstruct/x3/README.md).
 
-RimWorld is the integration-test corpus. Independent fixtures also exercise
-different filenames, archive destinations, file counts, compression options,
-manifest locations, and optional-volume names.
+RimWorld is the integration-test corpus. Songs of Conquest is a second
+repack used to catch encoders RimWorld does not exercise. Independent
+fixtures also exercise different filenames, archive destinations, file
+counts, compression options, manifest locations, and optional-volume names.
 Run regression tests with `go test -p 1 ./...`. Corpus tests skip unless
-`GAROTAFITNESS_CORPUS` points at the RimWorld repack directory. The full
-extraction test also needs `GAROTAFITNESS_FULL_EXTRACT`:
+`GAROTAFITNESS_CORPUS` points at the RimWorld repack directory. The Songs
+of Conquest tests use `GAROTAFITNESS_CORPUS_SOC`. The full extraction
+tests also need `GAROTAFITNESS_FULL_EXTRACT`:
 
 ```sh
 GAROTAFITNESS_CORPUS='/path/to/RimWorld [FitGirl Repack]' go test -p 1 ./...
 GAROTAFITNESS_CORPUS='/path/to/RimWorld [FitGirl Repack]' GAROTAFITNESS_FULL_EXTRACT=all go test . -run '^TestExtractInstalledRimWorld$' -timeout=1h
 GAROTAFITNESS_CORPUS='/path/to/RimWorld [FitGirl Repack]' GAROTAFITNESS_FULL_EXTRACT=required go test . -run '^TestExtractInstalledRimWorld$' -timeout=1h
+GAROTAFITNESS_CORPUS_SOC='/path/to/Songs of Conquest [FitGirl Repack]' go test -p 1 ./...
 ```

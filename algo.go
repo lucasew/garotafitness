@@ -20,6 +20,7 @@ const (
 	AlgoDelta
 	AlgoREP
 	AlgoPPMD
+	AlgoPref
 )
 
 var algoName = [...]string{
@@ -37,6 +38,7 @@ var algoName = [...]string{
 	AlgoDelta:   "delta",
 	AlgoREP:     "rep",
 	AlgoPPMD:    "ppmd",
+	AlgoPref:    "pref",
 }
 
 var algoByName = map[string]Algo{
@@ -55,6 +57,7 @@ var algoByName = map[string]Algo{
 	"delta":      AlgoDelta,
 	"rep":        AlgoREP,
 	"ppmd":       AlgoPPMD,
+	"pref":       AlgoPref,
 }
 
 // String returns the canonical on-disk name.

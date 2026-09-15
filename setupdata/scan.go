@@ -47,6 +47,7 @@ var known = []string{
 	"magic2",
 	"lzma2",
 	"ppmd",
+	"pref",
 	"srep",
 	"mpzz",
 	"rzwb",
