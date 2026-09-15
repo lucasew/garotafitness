@@ -26,6 +26,11 @@ const (
 	numTok
 )
 
+// DecodeStreams runs the 1.00 logical-stream pipeline on framed packets.
+func DecodeStreams(streams [8][][]byte) ([]byte, error) {
+	return (&archive{streams: streams}).decode()
+}
+
 // Decode each logical stream, restore the instruction and duplicate transforms,
 // and check every stored file CRC before exposing any bytes to the caller.
 func (a *archive) decode() ([]byte, error) {
@@ -41,7 +46,7 @@ func (a *archive) decode() ([]byte, error) {
 			}
 			continue
 		}
-		if f.size > 512<<20-size {
+		if size > maxPlain || f.size > maxPlain-size {
 			return nil, errTooLarge
 		}
 		size += f.size

@@ -198,10 +198,13 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - [ ] `setup.exe` is never executed.
 - [ ] Independent fixtures with different filenames, destinations, file counts,
   and compression parameters work without a game-specific configuration.
+- [ ] `garotafitness extract` on `/media/downloads/TORRENTS/Songs of Conquest [FitGirl Repack]` writes the game tree under Dest and exits 0.
 
 ## Later work
 
-1. An Encoder the RimWorld corpus does not use (XTool, lolz, precomp).
+1. An Encoder the RimWorld corpus does not use (XTool, lolz).
+   Songs of Conquest also uses rzs (RAZOR stdio); that Encoder is in scope.
+   pref (Precomp restore) is wrapped from official C++.
 2. A `list` command.
 3. A structured Inno 5.5 parse.
 4. wasm64.
