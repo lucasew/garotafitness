@@ -8,6 +8,7 @@
 !stream/rzw/rzwdec.wasm
 !stream/mpz/mpzdec.wasm
 !stream/pref/prefdec.wasm
+!stream/xt3u/xt3udec.wasm
 /stream/pref/build/
 !reconstruct/fsb/fsb.wasm
 !reconstruct/x5/hpatch.wasm

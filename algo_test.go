@@ -18,6 +18,7 @@ func TestParseAlgo(t *testing.T) {
 		{"rzwb", AlgoRZW},
 		{"rzs", AlgoRZS},
 		{"pref", AlgoPref},
+		{"xt3u", AlgoXT3U},
 		{"x2", AlgoInvalid},
 		{"fgpack", AlgoInvalid},
 		{"nope", AlgoInvalid},

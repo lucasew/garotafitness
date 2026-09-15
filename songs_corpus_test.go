@@ -24,6 +24,7 @@ func TestSongsOfConquestSetup(t *testing.T) {
 	require.Equal(t, 674, strings.Count(info.InstalledMD5, "\n"))
 	require.Contains(t, info.Encoders, "pref")
 	require.Contains(t, info.Encoders, "rzs")
+	require.Contains(t, info.Encoders, "xt3u")
 	require.Len(t, info.Operations, 12)
 }
 
@@ -83,7 +84,6 @@ func TestSongsOfConquestPipelines(t *testing.T) {
 }
 
 func TestExtractSongsOfConquestRZS(t *testing.T) {
-	t.Skip("1.03.7 front index (5 runs) is recovered; body split still misses the 35-byte stream-2 run")
 	src := corpus.OpenEnv(t, socCorpus)
 	name := "fg-02.bin"
 	dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}

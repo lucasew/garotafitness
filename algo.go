@@ -22,6 +22,7 @@ const (
 	AlgoREP
 	AlgoPPMD
 	AlgoPref
+	AlgoXT3U
 )
 
 var algoName = [...]string{
@@ -41,6 +42,7 @@ var algoName = [...]string{
 	AlgoREP:     "rep",
 	AlgoPPMD:    "ppmd",
 	AlgoPref:    "pref",
+	AlgoXT3U:    "xt3u",
 }
 
 var algoByName = map[string]Algo{
@@ -61,6 +63,7 @@ var algoByName = map[string]Algo{
 	"rep":        AlgoREP,
 	"ppmd":       AlgoPPMD,
 	"pref":       AlgoPref,
+	"xt3u":       AlgoXT3U,
 }
 
 // String returns the canonical on-disk name.
