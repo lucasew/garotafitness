@@ -39,6 +39,7 @@ var loadEngine = sync.OnceValues(func() (*engine, error) {
 		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
 		NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat").
 		NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir").
+		NewFunctionBuilder().WithFunc(func() int32 { return 0 }).Export("pref_extra_threads").
 		Instantiate(ctx); err != nil {
 		rt.Close(ctx)
 		return nil, fmt.Errorf("pref: env: %w", err)

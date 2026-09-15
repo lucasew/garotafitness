@@ -5,7 +5,10 @@
 #include <future>
 #include <utility>
 
-// Official preflate starts worker threads. Restore runs each task here.
+// extraThreadCount comes from Go (env.pref_extra_threads). Official
+// preflate uses that to size the analyze queue. addTask only runs if
+// Go returns a non-zero count; one guest instance is not reentrant,
+// so the host currently returns 0 and preflate stays on the inline path.
 class TaskPool {
 public:
 	TaskPool() = default;
@@ -20,7 +23,7 @@ public:
 		return res;
 	}
 
-	size_t extraThreadCount() const { return 0; }
+	size_t extraThreadCount() const;
 };
 
 extern TaskPool globalTaskPool;
