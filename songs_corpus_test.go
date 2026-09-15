@@ -83,29 +83,32 @@ func TestSongsOfConquestPipelines(t *testing.T) {
 	}
 }
 
-func TestExtractSongsOfConquestRZS(t *testing.T) {
+func TestExtractSongsOfConquestVolumes(t *testing.T) {
 	src := corpus.OpenEnv(t, socCorpus)
-	name := "fg-02.bin"
-	dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
-	require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}))
-	data, err := lewpath.New(name).ReadFile(src)
-	require.NoError(t, err)
-	v, err := parseVolume(name, data)
-	require.NoError(t, err)
-	checked := 0
-	for _, m := range v.Members {
-		if m.Dir {
-			continue
-		}
-		b, err := dst.require(m.Path)
-		require.NoError(t, err, m.Path)
-		require.Equal(t, m.Size, uint64(len(b)), m.Path)
-		table := m.crcTable
-		if table == nil {
-			table = crc32.IEEETable
-		}
-		require.Equal(t, m.CRC, crc32.Checksum(b, table), m.Path)
-		checked++
+	for _, name := range []string{"fg-01.bin", "fg-02.bin"} {
+		t.Run(name, func(t *testing.T) {
+			dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
+			require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}))
+			data, err := lewpath.New(name).ReadFile(src)
+			require.NoError(t, err)
+			v, err := parseVolume(name, data)
+			require.NoError(t, err)
+			checked := 0
+			for _, m := range v.Members {
+				if m.Dir {
+					continue
+				}
+				b, err := dst.require(m.Path)
+				require.NoError(t, err, m.Path)
+				require.Equal(t, m.Size, uint64(len(b)), m.Path)
+				table := m.crcTable
+				if table == nil {
+					table = crc32.IEEETable
+				}
+				require.Equal(t, m.CRC, crc32.Checksum(b, table), m.Path)
+				checked++
+			}
+			require.Greater(t, checked, 0)
+		})
 	}
-	require.Greater(t, checked, 0)
 }
