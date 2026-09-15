@@ -87,8 +87,8 @@ var rolzExtra = [32]byte{
 // widths sum to 256; bias 128 maps onto int8.
 var resExtra16 = [16]byte{0, 0, 1, 2, 3, 4, 5, 6, 6, 5, 4, 3, 2, 1, 0, 0}
 
-// imgExtra20 is 0x42b720 (obj 0x4315c0 via 0x42c150, n=20 at 0x4316fc).
-// ImagePred residual at 0x4047ca; first 5 symbols extra-0, then 1..15.
+// imgExtra20 is 0x42b720 (1.03.7 file 0x29c60 / VA 0x42c460).
+// ImagePred residual (0x4047ca / 1.03.7 0x404ae1); first 5 symbols extra-0, then 1..15.
 var imgExtra20 = [20]byte{0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 // 0x42b7c0 / reconstructed bases for far-distance first symbol (ctor 0x4319e0).
@@ -506,6 +506,8 @@ type dec struct {
 
 	rolz32 []rolzModel // 0xb5d0: 32-sym per prev byte
 
+	img imgPred
+
 	stRec [320][4]byte
 
 	why string
@@ -538,6 +540,7 @@ func newDec(src []byte, cap int) *dec {
 	d.stereo8.init()
 	d.mono16.init()
 	d.stereo16.init()
+	d.img.init()
 	for i := range d.color {
 		for j := range d.color[i] {
 			for k := range d.color[i][j] {
@@ -862,8 +865,7 @@ func (d *dec) token() bool {
 	case tokRGBA:
 		ok = d.tokRGB(4)
 	case tokImagePred:
-		d.why = "unsupported image predictor token"
-		return false
+		ok = d.tokImagePred()
 	case tokMono8:
 		ok = d.audioPCM8(1)
 	case tokStereo8:
