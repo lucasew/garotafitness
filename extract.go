@@ -30,6 +30,10 @@ func (e Extractor) Extract(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	return withSession(ctx, e.extract)
+}
+
+func (e Extractor) extract(ctx context.Context) error {
 	setup, setupErr := readSetup(e.Source)
 	if err := setupErr; err != nil {
 		return fmt.Errorf("setup.exe: %w", err)

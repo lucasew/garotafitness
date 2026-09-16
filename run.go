@@ -3,53 +3,43 @@ package garotafitness
 import (
 	"context"
 	"iter"
-	"runtime"
 
-	"golang.org/x/sync/errgroup"
+	"github.com/lewtec/lewkit/x/taskgroup"
 )
 
-// each hands values from in to workers over an unbuffered channel.
-// The first error cancels the rest. Algorithm packages do not call this.
-func each[T any](ctx context.Context, in iter.Seq[T], fn func(context.Context, T) error) error {
-	return eachN(ctx, workers(), in, fn)
+// withSession uses the Session in ctx, or starts one with DefaultLimits.
+func withSession(ctx context.Context, fn func(context.Context) error) error {
+	if taskgroup.FromContext(ctx) != nil {
+		return fn(ctx)
+	}
+	sess, ctx := taskgroup.New(ctx, taskgroup.DefaultLimits())
+	err := fn(ctx)
+	if werr := sess.Wait(); err == nil {
+		err = werr
+	}
+	return err
 }
 
-func eachN[T any](ctx context.Context, n int, in iter.Seq[T], fn func(context.Context, T) error) error {
+// each runs independent extract units on pool. Algorithm packages do not call this.
+func each[T any](ctx context.Context, in iter.Seq[T], fn func(context.Context, T) error) error {
+	return eachPool(ctx, taskgroup.CPU, in, fn)
+}
+
+func eachPool[T any](ctx context.Context, pool taskgroup.PoolKind, in iter.Seq[T], fn func(context.Context, T) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if n < 1 {
-		n = 1
-	}
-	g, ctx := errgroup.WithContext(ctx)
-	ch := make(chan T)
-	g.Go(func() error {
-		defer close(ch)
+	return withSession(ctx, func(ctx context.Context) error {
+		var items []T
 		for v := range in {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case ch <- v:
-			}
+			items = append(items, v)
 		}
-		return nil
+		return taskgroup.Each[T]{
+			PoolKind: pool,
+			Items:    items,
+			Fn: func(ctx context.Context, _ *taskgroup.Status, item T) error {
+				return fn(ctx, item)
+			},
+		}.Run(ctx)
 	})
-	for range n {
-		g.Go(func() error {
-			for v := range ch {
-				if err := ctx.Err(); err != nil {
-					return err
-				}
-				if err := fn(ctx, v); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	}
-	return g.Wait()
-}
-
-func workers() int {
-	return max(1, runtime.GOMAXPROCS(0))
 }

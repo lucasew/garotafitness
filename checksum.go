@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/taskgroup"
 )
 
 const checksumName = "MD5/fitgirl-bins.md5"
@@ -50,7 +51,7 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 		}
 		return fmt.Errorf("checksum: missing %s", file)
 	}
-	return each(ctx, func(yield func(job) bool) {
+	return eachPool(ctx, taskgroup.IO, func(yield func(job) bool) {
 		for file, sum := range want {
 			v, ok := have[file]
 			if !ok {

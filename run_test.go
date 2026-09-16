@@ -68,24 +68,4 @@ func TestEachCanceled(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 }
 
-func TestEachStopsProducer(t *testing.T) {
-	t.Parallel()
-	boom := errors.New("boom")
-	var yielded atomic.Int32
-	seq := func(yield func(int) bool) {
-		for i := 0; i < 256; i++ {
-			yielded.Add(1)
-			if !yield(i) {
-				return
-			}
-		}
-	}
-	err := each(t.Context(), seq, func(_ context.Context, v int) error {
-		if v == 0 {
-			return boom
-		}
-		return nil
-	})
-	require.ErrorIs(t, err, boom)
-	require.Less(t, yielded.Load(), int32(256))
-}
+

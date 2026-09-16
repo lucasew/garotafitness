@@ -74,7 +74,7 @@ func TestExtractInstalledRimWorld(t *testing.T) {
 		count++
 	}
 	require.Equal(t, 1712, count, "installed-file MD5 count")
-	tracks := test.Collect(t, lewpath.New("Soundtrack").Glob(dst, "*.mp3"))
+	tracks := test.Collect(t, lewpath.New("Soundtrack").Glob(t.Context(), dst, "*.mp3"))
 	want := 0
 	if mode == "all" {
 		want = 31

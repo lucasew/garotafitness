@@ -8,6 +8,7 @@ import (
 
 	"github.com/lewtec/lewkit/x/cmd"
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness"
 )
 
@@ -27,6 +28,7 @@ func (root) Description() string {
 }
 
 type extractCmd struct {
+	taskgroup.Arg
 	Source cmd.WorkDirArg `help:"repack directory with setup.exe and fg-*.bin volumes"`
 	Dest   cmd.DataDirArg `help:"destination directory"`
 }
@@ -41,6 +43,8 @@ func (c *extractCmd) Run(ctx context.Context) error {
 	if srcPath == "" || dstPath == "" {
 		return cmd.ErrUsage
 	}
+	sess, ctx := c.Enter(ctx, taskgroup.DefaultLimits())
+	defer sess.Wait()
 	src, err := lewpath.Open(srcPath)
 	if err != nil {
 		return err
