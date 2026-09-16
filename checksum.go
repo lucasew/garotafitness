@@ -54,8 +54,8 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 	}
 	fns := make([]func(context.Context) error, len(jobs))
 	for i, j := range jobs {
-		fns[i] = func(context.Context) error {
-			got, err := hashFile(src, j.name)
+		fns[i] = func(ctx context.Context) error {
+			got, err := hashFile(ctx, src, j.name)
 			if err != nil {
 				return err
 			}
@@ -94,15 +94,27 @@ func parseMD5(r io.Reader) (map[string]string, error) {
 	return out, nil
 }
 
-func hashFile(src fs.FS, name string) (string, error) {
+func hashFile(ctx context.Context, src fs.FS, name string) (string, error) {
 	f, err := lewpath.New(name).Open(src)
 	if err != nil {
 		return "", fmt.Errorf("checksum open %s: %w", name, err)
 	}
 	defer f.Close()
 	h := md5.New()
-	if _, err := io.Copy(h, f); err != nil {
+	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
 		return "", fmt.Errorf("checksum hash %s: %w", name, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+type ctxReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c ctxReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }

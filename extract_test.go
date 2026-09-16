@@ -57,7 +57,7 @@ func TestExtractStoringSolid(t *testing.T) {
 			{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")},
 		},
 	}
-	require.NoError(t, extractSolid(Extractor{Dest: d}, data, s))
+	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, data, s))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -80,7 +80,7 @@ func TestExtractStackedStoring(t *testing.T) {
 			{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing+storing")},
 		},
 	}
-	require.NoError(t, extractSolid(Extractor{Dest: d}, data, s))
+	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, data, s))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -100,7 +100,7 @@ func TestExtractCRCMismatch(t *testing.T) {
 			{Path: "a.txt", Size: 5, CRC: crc32.ChecksumIEEE(data) ^ 1, Pipeline: ParsePipeline("storing")},
 		},
 	}
-	require.ErrorContains(t, extractSolid(Extractor{Dest: d}, data, s), "crc")
+	require.ErrorContains(t, extractSolid(t.Context(), Extractor{Dest: d}, data, s), "crc")
 }
 
 func TestExtractIndependentSolids(t *testing.T) {

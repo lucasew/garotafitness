@@ -122,21 +122,16 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 	}
-	names := sortedKeys(s.files)
-	fns := make([]func(context.Context) error, len(names))
-	for i, name := range names {
-		b := s.files[name]
-		fns[i] = func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return writeMember(e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b))
+	for _, name := range sortedKeys(s.files) {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
+		b := s.files[name]
+		if err := writeMember(e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b)); err != nil {
+			return err
+		}
+		delete(s.files, name)
 	}
-	if err := runParallel(ctx, fns); err != nil {
-		return err
-	}
-	s.files = map[string][]byte{}
 	return nil
 }
 

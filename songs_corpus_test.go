@@ -101,7 +101,7 @@ func TestExtractSongsOfConquestPref(t *testing.T) {
 			continue
 		}
 		found = true
-		require.NoError(t, extractSolid(Extractor{Source: src, Dest: dst}, data, s))
+		require.NoError(t, extractSolid(t.Context(), Extractor{Source: src, Dest: dst}, data, s))
 		for _, m := range s.files {
 			if m.Dir {
 				continue

@@ -47,10 +47,7 @@ func TestRunParallelFirstError(t *testing.T) {
 	boom := errors.New("boom")
 	err := runParallel(t.Context(), []func(context.Context) error{
 		func(context.Context) error { return boom },
-		func(ctx context.Context) error {
-			<-ctx.Done()
-			return ctx.Err()
-		},
+		func(ctx context.Context) error { return ctx.Err() },
 	})
 	require.ErrorIs(t, err, boom)
 }

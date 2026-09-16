@@ -10,6 +10,8 @@ import (
 )
 
 // Dest is the write port for Extract. fs.FS cannot create files.
+// MkdirAll and Create may run from several goroutines at once; distinct
+// names are safe. The same name is last-close-wins.
 type Dest interface {
 	MkdirAll(name string, perm fs.FileMode) error
 	Create(name string) (io.WriteCloser, error)

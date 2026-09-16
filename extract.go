@@ -127,7 +127,7 @@ func extractSolids(ctx context.Context, e Extractor, data []byte, solids []solid
 			if err := ctx.Err(); err != nil {
 				return err
 			}
-			return extractSolid(e, data, s)
+			return extractSolid(ctx, e, data, s)
 		}
 	}
 	return runParallel(ctx, fns)
@@ -168,7 +168,7 @@ func groupSolids(ms []Member) []solid {
 	return out
 }
 
-func extractSolid(e Extractor, data []byte, s solid) error {
+func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error {
 	if len(s.files) == 0 {
 		return nil
 	}
@@ -198,6 +198,9 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 		src = r
 	}
 	for _, m := range s.files {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if err := writeMember(e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
 			return err
 		}
