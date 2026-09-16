@@ -3,7 +3,7 @@ module github.com/lucasew/garotafitness
 go 1.27.0
 
 require (
-	github.com/lewtec/lewkit v0.0.0-20260916191131-bf3279691937
+	github.com/lewtec/lewkit v0.0.0-20260916191725-98e9693f1819
 	github.com/stretchr/testify v1.12.1
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/ulikunitz/xz v0.5.16

@@ -44,10 +44,8 @@ func (c *extractCmd) Run(ctx context.Context) error {
 	if srcPath == "" || dstPath == "" {
 		return cmd.ErrUsage
 	}
-	ctx, stop := context.WithCancel(ctx)
-	defer stop()
 	sess, ctx := enterSession(ctx)
-	return progress.Run(sess, progress.WithStop(ctx, stop), func(ctx context.Context) error {
+	return progress.Run(sess, ctx, func(ctx context.Context) error {
 		src, err := lewpath.Open(srcPath)
 		if err != nil {
 			return err
