@@ -139,8 +139,8 @@ func (r *reader) launch() {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.cancel = cancel
 	r.hold = map[int][]byte{}
-	jobs := make(chan job)
-	results := make(chan block)
+	jobs := make(chan job, 1)
+	results := make(chan block, n)
 	r.results = results
 	g, ctx := errgroup.WithContext(ctx)
 	g.Go(func() error {

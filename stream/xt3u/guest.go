@@ -4,13 +4,12 @@ import (
 	"context"
 	_ "embed"
 	"fmt"
-	"io"
 	"sync"
 	"sync/atomic"
 
+	"github.com/lucasew/garotafitness/internal/wasmrun"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
 //go:embed xt3udec.wasm
@@ -18,31 +17,11 @@ var guestWASM []byte
 
 var instID atomic.Uint64
 
-type engine struct {
-	rt       wazero.Runtime
-	compiled wazero.CompiledModule
-}
-
-var loadEngine = sync.OnceValues(func() (*engine, error) {
-	ctx := context.Background()
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	if _, err := rt.NewHostModuleBuilder("env").
-		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
-		Instantiate(ctx); err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("xt3u: env: %w", err)
-	}
-	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-	compiled, err := rt.CompileModule(ctx, guestWASM)
-	if err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("xt3u: compile guest: %w", err)
-	}
-	return &engine{rt: rt, compiled: compiled}, nil
-})
+var compileCache = sync.OnceValue(wazero.NewCompilationCache)
 
 type lz4guest struct {
 	ctx    context.Context
+	inst   *wasmrun.Instance
 	mod    api.Module
 	mem    api.Memory
 	hc     api.Function
@@ -57,21 +36,16 @@ func openGuest() (*lz4guest, error) {
 	if len(guestWASM) == 0 {
 		return nil, errGuest
 	}
-	eng, err := loadEngine()
+	ctx := context.Background()
+	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "xt3u", wasmrun.Emscripten(nil), wazero.NewModuleConfig().
+		WithName(fmt.Sprintf("xt3u-%d", instID.Add(1))))
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
-	mod, err := eng.rt.InstantiateModule(ctx, eng.compiled, wazero.NewModuleConfig().
-		WithName(fmt.Sprintf("xt3u-%d", instID.Add(1))).
-		WithStartFunctions("_initialize").
-		WithStdout(io.Discard).
-		WithStderr(io.Discard))
-	if err != nil {
-		return nil, fmt.Errorf("xt3u: instantiate: %w", err)
-	}
+	mod := inst.Mod
 	g := &lz4guest{
 		ctx:    ctx,
+		inst:   inst,
 		mod:    mod,
 		mem:    mod.Memory(),
 		hc:     mod.ExportedFunction("xt3u_lz4hc"),
@@ -82,17 +56,18 @@ func openGuest() (*lz4guest, error) {
 		free:   mod.ExportedFunction("free"),
 	}
 	if g.mem == nil || g.hc == nil || g.fast == nil || g.bound == nil || g.zstd == nil || g.malloc == nil || g.free == nil {
-		mod.Close(ctx)
+		inst.Close(ctx)
 		return nil, errGuest
 	}
 	return g, nil
 }
 
 func (g *lz4guest) Close() error {
-	if g == nil || g.mod == nil {
+	if g == nil || g.inst == nil {
 		return nil
 	}
-	err := g.mod.Close(g.ctx)
+	err := g.inst.Close(g.ctx)
+	g.inst = nil
 	g.mod = nil
 	return err
 }

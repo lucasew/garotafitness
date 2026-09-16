@@ -11,9 +11,9 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/lucasew/garotafitness/internal/wasmrun"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
 //go:embed srepdec.wasm
@@ -30,33 +30,13 @@ var (
 	instID      atomic.Uint64
 )
 
-type engine struct {
-	rt       wazero.Runtime
-	compiled wazero.CompiledModule
-}
+var compileCache = sync.OnceValue(wazero.NewCompilationCache)
 
-var loadEngine = sync.OnceValues(func() (*engine, error) {
-	ctx := context.Background()
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	if _, err := instantiateEnv(ctx, rt); err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("srep: env: %w", err)
-	}
-	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-	compiled, err := rt.CompileModule(ctx, guestWASM)
-	if err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("srep: compile guest: %w", err)
-	}
-	return &engine{rt: rt, compiled: compiled}, nil
-})
-
-func instantiateEnv(ctx context.Context, rt wazero.Runtime) (api.Closer, error) {
-	return rt.NewHostModuleBuilder("env").
-		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
-		NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat").
-		NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir").
-		Instantiate(ctx)
+func srepHost(ctx context.Context, rt wazero.Runtime) error {
+	return wasmrun.Emscripten(func(b wazero.HostModuleBuilder) {
+		b.NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat")
+		b.NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir")
+	})(ctx, rt)
 }
 
 // NewReader wraps an official SREP v3 stream as compress/gzip does.
@@ -76,24 +56,19 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 			return nil, fmt.Errorf("srep: seed: %w", err)
 		}
 	}
-	eng, err := loadEngine()
+	ctx := context.Background()
+	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "srep", srepHost, wazero.NewModuleConfig().
+		WithName(fmt.Sprintf("srep-%d", instID.Add(1))))
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
-	mod, err := eng.rt.InstantiateModule(ctx, eng.compiled, wazero.NewModuleConfig().
-		WithName(fmt.Sprintf("srep-%d", instID.Add(1))).
-		WithStartFunctions("_initialize").
-		WithStdout(io.Discard).
-		WithStderr(io.Discard))
-	if err != nil {
-		return nil, fmt.Errorf("srep: instantiate: %w", err)
-	}
+	mod := inst.Mod
 	open := mod.ExportedFunction("srep_open")
 	rd := &reader{
 		src:    r,
 		hdr:    h,
 		ctx:    ctx,
+		inst:   inst,
 		mod:    mod,
 		mem:    mod.Memory(),
 		block:  mod.ExportedFunction("srep_block"),
@@ -102,11 +77,11 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 		free:   mod.ExportedFunction("free"),
 	}
 	if rd.mem == nil || open == nil || rd.block == nil || rd.cls == nil || rd.malloc == nil || rd.free == nil {
-		mod.Close(ctx)
+		inst.Close(ctx)
 		return nil, errGuest
 	}
 	if _, err := open.Call(ctx, uint64(h.BaseLen)); err != nil {
-		mod.Close(ctx)
+		inst.Close(ctx)
 		return nil, fmt.Errorf("srep: open: %w", err)
 	}
 	return rd, nil
@@ -116,6 +91,7 @@ type reader struct {
 	src    io.Reader
 	hdr    Header
 	ctx    context.Context
+	inst   *wasmrun.Instance
 	mod    api.Module
 	mem    api.Memory
 	block  api.Function
@@ -155,13 +131,13 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 func (r *reader) Close() error {
-	if r.mod == nil {
+	if r.inst == nil {
 		return nil
 	}
 	if r.cls != nil {
 		_, _ = r.cls.Call(r.ctx)
 	}
-	err := r.mod.Close(r.ctx)
+	err := r.inst.Close(r.ctx)
 	r.mod = nil
 	r.err = errClosed
 	r.buf = nil

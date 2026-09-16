@@ -316,7 +316,8 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 }
 
 func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Operation) func() {
-	ch := make(chan decodedVol)
+	// One slot per in-flight volume so a finished decode does not wait for the op tape.
+	ch := make(chan decodedVol, 16)
 	p.incoming = ch
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

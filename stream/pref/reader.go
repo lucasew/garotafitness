@@ -14,8 +14,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/lucasew/garotafitness/internal/wasmrun"
 	"github.com/tetratelabs/wazero"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
 //go:embed prefdec.wasm
@@ -27,31 +27,15 @@ var (
 	instID   atomic.Uint64
 )
 
-type engine struct {
-	rt       wazero.Runtime
-	compiled wazero.CompiledModule
-}
+var compileCache = sync.OnceValue(wazero.NewCompilationCache)
 
-var loadEngine = sync.OnceValues(func() (*engine, error) {
-	ctx := context.Background()
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	if _, err := rt.NewHostModuleBuilder("env").
-		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
-		NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat").
-		NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir").
-		NewFunctionBuilder().WithFunc(func() int32 { return 0 }).Export("pref_extra_threads").
-		Instantiate(ctx); err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("pref: env: %w", err)
-	}
-	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-	compiled, err := rt.CompileModule(ctx, guestWASM)
-	if err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("pref: compile guest: %w", err)
-	}
-	return &engine{rt: rt, compiled: compiled}, nil
-})
+func prefHost(ctx context.Context, rt wazero.Runtime) error {
+	return wasmrun.Emscripten(func(b wazero.HostModuleBuilder) {
+		b.NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat")
+		b.NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir")
+		b.NewFunctionBuilder().WithFunc(func() int32 { return 0 }).Export("pref_extra_threads")
+	})(ctx, rt)
+}
 
 // NewReader wraps an official PCF stream as compress/gzip does.
 func NewReader(r io.Reader) (io.ReadCloser, error) {
@@ -76,21 +60,17 @@ func restore(in []byte) ([]byte, error) {
 	if len(guestWASM) == 0 {
 		return nil, errGuest
 	}
-	eng, err := loadEngine()
-	if err != nil {
-		return nil, err
-	}
 	ctx := context.Background()
 	var stdio bytes.Buffer
-	mod, err := eng.rt.InstantiateModule(ctx, eng.compiled, wazero.NewModuleConfig().
+	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "pref", prefHost, wazero.NewModuleConfig().
 		WithName(fmt.Sprintf("pref-%d", instID.Add(1))).
-		WithStartFunctions("_initialize").
 		WithStdout(&stdio).
 		WithStderr(&stdio))
 	if err != nil {
-		return nil, fmt.Errorf("pref: instantiate: %w", err)
+		return nil, err
 	}
-	defer mod.Close(ctx)
+	defer inst.Close(ctx)
+	mod := inst.Mod
 	fn := mod.ExportedFunction("pref_restore")
 	malloc := mod.ExportedFunction("malloc")
 	free := mod.ExportedFunction("free")
