@@ -42,9 +42,9 @@ func TestSongsOfConquestPrefHeader(t *testing.T) {
 		if s.pipe.String() != "pref+srep:m3yf+magic2" {
 			continue
 		}
-		r, err := Decode(bytes.NewReader(data[s.off:s.off+int64(s.csz)]), s.pipe[len(s.pipe)-1])
+		r, err := Decode(t.Context(), bytes.NewReader(data[s.off:s.off+int64(s.csz)]), s.pipe[len(s.pipe)-1])
 		require.NoError(t, err)
-		r2, err := Decode(r, s.pipe[len(s.pipe)-2])
+		r2, err := Decode(t.Context(), r, s.pipe[len(s.pipe)-2])
 		require.NoError(t, err)
 		var head [16]byte
 		n, err := io.ReadFull(r2, head[:])

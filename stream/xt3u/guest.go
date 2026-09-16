@@ -32,11 +32,13 @@ type lz4guest struct {
 	free   api.Function
 }
 
-func openGuest() (*lz4guest, error) {
+func openGuest(ctx context.Context) (*lz4guest, error) {
 	if len(guestWASM) == 0 {
 		return nil, errGuest
 	}
-	ctx := context.Background()
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "xt3u", wasmrun.Emscripten(nil), wazero.NewModuleConfig().
 		WithName(fmt.Sprintf("xt3u-%d", instID.Add(1))))
 	if err != nil {

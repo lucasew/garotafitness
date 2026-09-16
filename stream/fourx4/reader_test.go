@@ -2,6 +2,7 @@ package fourx4
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -38,10 +39,10 @@ func TestParseInner(t *testing.T) {
 
 func TestNewReaderNil(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(nil, "rzw", ident); err == nil {
+	if _, err := NewReader(t.Context(), nil, "rzw", ident); err == nil {
 		t.Fatal("want nil reader")
 	}
-	if _, err := NewReader(bytes.NewReader(nil), "rzw", nil); err == nil {
+	if _, err := NewReader(t.Context(), bytes.NewReader(nil), "rzw", nil); err == nil {
 		t.Fatal("want nil inner")
 	}
 }
@@ -50,12 +51,12 @@ func TestStoredRoundTrip(t *testing.T) {
 	t.Parallel()
 	plain := []byte("hello 4x4 stored")
 	var called bool
-	inner := func(r io.Reader, name, params string) (io.ReadCloser, error) {
+	inner := func(_ context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
 		called = true
-		return ident(r, name, params)
+		return ident(t.Context(), r, name, params)
 	}
 	in := frameStored(plain)
-	rd, err := NewReader(bytes.NewReader(in), "b128mb:rzw", inner)
+	rd, err := NewReader(t.Context(), bytes.NewReader(in), "b128mb:rzw", inner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +76,7 @@ func TestInnerCompressed(t *testing.T) {
 	t.Parallel()
 	plain := []byte("inner payload")
 	var gotName, gotParams string
-	inner := func(r io.Reader, name, params string) (io.ReadCloser, error) {
+	inner := func(_ context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
 		gotName, gotParams = name, params
 		b, err := io.ReadAll(r)
 		if err != nil {
@@ -91,7 +92,7 @@ func TestInnerCompressed(t *testing.T) {
 		comp[i] ^= 0x5a
 	}
 	in := frameComp(uint32(len(plain)), comp)
-	rd, err := NewReader(bytes.NewReader(in), "b16mb:mpz:q1", inner)
+	rd, err := NewReader(t.Context(), bytes.NewReader(in), "b16mb:mpz:q1", inner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestManyBlocksOrder(t *testing.T) {
 		putU32(&framed, uint32(len(comp)))
 		framed.Write(comp)
 	}
-	inner := func(r io.Reader, _, _ string) (io.ReadCloser, error) {
+	inner := func(_ context.Context, r io.Reader, _, _ string) (io.ReadCloser, error) {
 		b, err := io.ReadAll(r)
 		if err != nil {
 			return nil, err
@@ -134,7 +135,7 @@ func TestManyBlocksOrder(t *testing.T) {
 		}
 		return io.NopCloser(bytes.NewReader(b)), nil
 	}
-	rd, err := NewReader(bytes.NewReader(framed.Bytes()), "t4:rzw", inner)
+	rd, err := NewReader(t.Context(), bytes.NewReader(framed.Bytes()), "t4:rzw", inner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +160,7 @@ func TestParseThreads(t *testing.T) {
 
 func TestEmptyStream(t *testing.T) {
 	t.Parallel()
-	rd, err := NewReader(bytes.NewReader(nil), "rzw", ident)
+	rd, err := NewReader(t.Context(), bytes.NewReader(nil), "rzw", ident)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,18 +176,18 @@ func TestEmptyStream(t *testing.T) {
 func TestBadVersion(t *testing.T) {
 	t.Parallel()
 	in := []byte{1, 0, 0, 0}
-	if _, err := NewReader(bytes.NewReader(in), "rzw", ident); err == nil {
+	if _, err := NewReader(t.Context(), bytes.NewReader(in), "rzw", ident); err == nil {
 		t.Fatal("want version error")
 	}
 }
 
 func TestInnerError(t *testing.T) {
 	t.Parallel()
-	boom := func(io.Reader, string, string) (io.ReadCloser, error) {
+	boom := func(context.Context, io.Reader, string, string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("nope")
 	}
 	in := frameComp(4, []byte("xxxx"))
-	rd, err := NewReader(bytes.NewReader(in), "rzw", boom)
+	rd, err := NewReader(t.Context(), bytes.NewReader(in), "rzw", boom)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +196,7 @@ func TestInnerError(t *testing.T) {
 	}
 }
 
-func ident(r io.Reader, _, _ string) (io.ReadCloser, error) {
+func ident(_ context.Context, r io.Reader, _, _ string) (io.ReadCloser, error) {
 	return io.NopCloser(r), nil
 }
 

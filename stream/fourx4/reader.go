@@ -26,22 +26,25 @@ const storedOut = ^uint32(0)
 
 // Inner opens one inner-method stream. name and params are the remainder
 // after 4x4's own options (block size, threads, …).
-type Inner func(r io.Reader, name, params string) (io.ReadCloser, error)
+type Inner func(ctx context.Context, r io.Reader, name, params string) (io.ReadCloser, error)
 
 // NewReader unwraps a 4x4 stream and feeds each compressed block to inner.
 // params is the on-disk token after "4x4:", e.g. "b128mb:rzw".
-func NewReader(r io.Reader, params string, inner Inner) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, r io.Reader, params string, inner Inner) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNilReader
 	}
 	if inner == nil {
 		return nil, errNilInner
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	name, iparams, err := parseInner(params)
 	if err != nil {
 		return nil, err
 	}
-	rd := &reader{src: r, inner: inner, name: name, iparams: iparams, threads: parseThreads(params)}
+	rd := &reader{ctx: ctx, src: r, inner: inner, name: name, iparams: iparams, threads: parseThreads(params)}
 	if err := rd.readVersion(); err != nil {
 		return nil, err
 	}
@@ -49,6 +52,7 @@ func NewReader(r io.Reader, params string, inner Inner) (io.ReadCloser, error) {
 }
 
 type reader struct {
+	ctx     context.Context
 	src     io.Reader
 	inner   Inner
 	name    string
@@ -136,7 +140,7 @@ func (r *reader) Close() error {
 
 func (r *reader) launch() {
 	n := max(1, r.threads)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(r.ctx)
 	r.cancel = cancel
 	r.hold = map[int][]byte{}
 	jobs := make(chan job, 1)
@@ -236,7 +240,7 @@ func (r *reader) decode(j job) ([]byte, error) {
 	if j.stored {
 		return j.in, nil
 	}
-	ir, err := r.inner(bytes.NewReader(j.in), r.name, r.iparams)
+	ir, err := r.inner(r.ctx, bytes.NewReader(j.in), r.name, r.iparams)
 	if err != nil {
 		return nil, err
 	}

@@ -1,6 +1,8 @@
 package garotafitness
 
 import (
+	"bytes"
+	"context"
 	"fmt"
 	"hash/crc32"
 	"slices"
@@ -143,6 +145,17 @@ func TestExtractIndependentSolidsStaging(t *testing.T) {
 	}
 	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, data, slices.Values(solids)))
 	require.Equal(t, want, s.files)
+}
+
+func TestWriteMemberCanceled(t *testing.T) {
+	t.Parallel()
+	d, err := OpenDirDest(t.TempDir())
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, d)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = writeMember(ctx, d, Member{Path: "a.txt", Size: 5}, bytes.NewReader([]byte("hello")))
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestExtractUnknownEncoder(t *testing.T) {

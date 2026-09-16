@@ -12,9 +12,12 @@ import (
 // 16-byte header followed by range-coded MP3 frames and literal runs.
 // Version 5.4.5.0 carries complemented literal bytes after its four-byte tag.
 // The reconstructed decoder is compiled to WASM; no installer code is loaded.
-func NewReader(r io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	h, err := ParseHeader(r)
 	if err != nil {
@@ -23,7 +26,7 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if h.Version == version5451 && (h.Orig == 0 || h.Orig > maxBlock) {
 		return nil, fmt.Errorf("mpz: invalid output size %d", h.Orig)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	return &reader{src: r, hdr: h, ctx: ctx, cancel: cancel}, nil
 }
 
@@ -73,6 +76,9 @@ func (r *reader) Close() error {
 }
 
 func (r *reader) fill() error {
+	if err := r.ctx.Err(); err != nil {
+		return err
+	}
 	src, err := io.ReadAll(io.LimitReader(r.src, maxBlock+1))
 	if err != nil {
 		return err

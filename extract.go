@@ -108,7 +108,7 @@ func extractVolume(ctx context.Context, e Extractor, v Volume) error {
 		return fmt.Errorf("open %s: %w", v.Name, err)
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
+	data, err := io.ReadAll(ctxReader{ctx, f})
 	if err != nil {
 		return fmt.Errorf("read %s: %w", v.Name, err)
 	}
@@ -197,7 +197,7 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error 
 		}
 	}()
 	for i := len(s.pipe) - 1; i >= 0; i-- {
-		r, err := Decode(src, s.pipe[i])
+		r, err := Decode(ctx, src, s.pipe[i])
 		if err != nil {
 			return err
 		}
@@ -208,7 +208,7 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error 
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := writeMember(e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
+		if err := writeMember(ctx, e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
 			return err
 		}
 	}
@@ -222,7 +222,7 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error 
 	return nil
 }
 
-func writeMember(dst Dest, m Member, r io.Reader) error {
+func writeMember(ctx context.Context, dst Dest, m Member, r io.Reader) error {
 	w, err := dst.Create(m.Path)
 	if err != nil {
 		return err
@@ -232,7 +232,7 @@ func writeMember(dst Dest, m Member, r io.Reader) error {
 		table = crc32.IEEETable
 	}
 	h := crc32.New(table)
-	n, err := io.Copy(w, io.TeeReader(r, h))
+	n, err := copyCtx(ctx, w, io.TeeReader(r, h))
 	if err != nil {
 		w.Close()
 		return fmt.Errorf("write %s: %w", m.Path, err)

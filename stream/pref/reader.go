@@ -38,9 +38,12 @@ func prefHost(ctx context.Context, rt wazero.Runtime) error {
 }
 
 // NewReader wraps an official PCF stream as compress/gzip does.
-func NewReader(r io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	in, err := io.ReadAll(r)
 	if err != nil {
@@ -49,18 +52,17 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if len(in) < 7 || string(in[:3]) != "PCF" {
 		return nil, fmt.Errorf("pref: bad magic")
 	}
-	out, err := restore(in)
+	out, err := restore(ctx, in)
 	if err != nil {
 		return nil, err
 	}
 	return io.NopCloser(bytes.NewReader(out)), nil
 }
 
-func restore(in []byte) ([]byte, error) {
+func restore(ctx context.Context, in []byte) ([]byte, error) {
 	if len(guestWASM) == 0 {
 		return nil, errGuest
 	}
-	ctx := context.Background()
 	var stdio bytes.Buffer
 	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "pref", prefHost, wazero.NewModuleConfig().
 		WithName(fmt.Sprintf("pref-%d", instID.Add(1))).

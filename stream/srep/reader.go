@@ -40,9 +40,12 @@ func srepHost(ctx context.Context, rt wazero.Runtime) error {
 }
 
 // NewReader wraps an official SREP v3 stream as compress/gzip does.
-func NewReader(r io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	h, err := ParseHeader(r)
 	if err != nil {
@@ -56,7 +59,6 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 			return nil, fmt.Errorf("srep: seed: %w", err)
 		}
 	}
-	ctx := context.Background()
 	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "srep", srepHost, wazero.NewModuleConfig().
 		WithName(fmt.Sprintf("srep-%d", instID.Add(1))))
 	if err != nil {
@@ -209,6 +211,9 @@ func (r *reader) decode(stat, lits []byte, orig uint32) ([]byte, error) {
 	}
 	if len(lits) > 0 && !r.mem.Write(litPtr, lits) {
 		return nil, errGuest
+	}
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
 	}
 	res, err := r.block.Call(r.ctx,
 		uint64(statPtr), uint64(len(stat)),

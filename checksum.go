@@ -106,20 +106,8 @@ func hashFile(ctx context.Context, src fs.FS, name string) (string, error) {
 	}
 	defer f.Close()
 	h := md5.New()
-	if _, err := io.Copy(h, ctxReader{ctx, f}); err != nil {
+	if _, err := copyCtx(ctx, h, f); err != nil {
 		return "", fmt.Errorf("checksum hash %s: %w", name, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
-}
-
-type ctxReader struct {
-	ctx context.Context
-	r   io.Reader
-}
-
-func (c ctxReader) Read(p []byte) (int, error) {
-	if err := c.ctx.Err(); err != nil {
-		return 0, err
-	}
-	return c.r.Read(p)
 }

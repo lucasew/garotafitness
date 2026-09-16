@@ -127,7 +127,7 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 		b := s.files[name]
-		if err := writeMember(e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b)); err != nil {
+		if err := writeMember(ctx, e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b)); err != nil {
 			return err
 		}
 		delete(s.files, name)

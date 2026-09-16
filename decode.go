@@ -1,6 +1,7 @@
 package garotafitness
 
 import (
+	"context"
 	"io"
 
 	"github.com/lucasew/garotafitness/stream/delta"
@@ -21,12 +22,15 @@ import (
 // Decode wraps r with the atom's decompressor.
 // The root package owns this switch. Child packages must not import
 // it. 4x4 takes a func(io.Reader, name, params string) instead.
-func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
+func Decode(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	switch a.Algo {
 	case Algo4x4:
-		return fourx4.NewReader(r, a.Params, decodeInner)
+		return fourx4.NewReader(ctx, r, a.Params, decodeInner)
 	case AlgoSREP:
-		return srep.NewReader(r)
+		return srep.NewReader(ctx, r)
 	case AlgoLZMA:
 		return lzma.NewReader(r)
 	case AlgoStoring:
@@ -38,7 +42,7 @@ func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
 	case AlgoMPZZ:
 		return mpzz.NewReader(r)
 	case AlgoMPZ:
-		return mpz.NewReader(r)
+		return mpz.NewReader(ctx, r)
 	case AlgoRZW:
 		return rzw.NewReader(r)
 	case AlgoRZS:
@@ -46,14 +50,14 @@ func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
 	case AlgoMagic2:
 		return magic2.NewReader(r)
 	case AlgoPref:
-		return pref.NewReader(r)
+		return pref.NewReader(ctx, r)
 	case AlgoXT3U:
-		return xt3u.NewReader(r)
+		return xt3u.NewReader(ctx, r)
 	default:
 		return nil, unknownEncoderError(a)
 	}
 }
 
-func decodeInner(r io.Reader, name, params string) (io.ReadCloser, error) {
-	return Decode(r, Atom{Algo: ParseAlgo(name), Params: params})
+func decodeInner(ctx context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
+	return Decode(ctx, r, Atom{Algo: ParseAlgo(name), Params: params})
 }

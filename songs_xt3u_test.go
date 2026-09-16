@@ -46,7 +46,7 @@ func TestSongsOfConquestXT3UMembers(t *testing.T) {
 		}
 	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
-		dec, err := Decode(r, s.pipe[i])
+		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err)
 		closers = append(closers, dec)
 		r = dec
