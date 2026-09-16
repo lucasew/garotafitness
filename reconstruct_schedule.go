@@ -80,11 +80,22 @@ func (p *reconstructionPlan) scheduleWords(ctx context.Context, w []string, cwd 
 	return p.scheduleLeaf(ctx, name, w, cwd, depth, reads, writes, glob, taskgroup.CPU)
 }
 
+func leafLabel(prog string, reads, writes []string) string {
+	focus := writes
+	if len(focus) == 0 {
+		focus = reads
+	}
+	if len(focus) == 0 {
+		return prog
+	}
+	return prog + " " + strings.Join(focus, " ")
+}
+
 func (p *reconstructionPlan) scheduleLeaf(ctx context.Context, name string, w []string, cwd string, depth int, reads, writes []string, glob bool, pool taskgroup.PoolKind) error {
 	deps := p.fileDeps(reads, writes, glob)
+	label := leafLabel(name, reads, writes)
 	p.pending.Add(1)
-	id := taskgroup.Go(ctx, name, pool, func(ctx context.Context, s *taskgroup.Status) error {
-		s.Update(name)
+	id := taskgroup.Go(ctx, label, pool, func(ctx context.Context, s *taskgroup.Status) error {
 		defer p.pending.Done()
 		var err error
 		if pool == taskgroup.Control {

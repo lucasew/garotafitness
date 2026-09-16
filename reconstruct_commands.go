@@ -353,11 +353,19 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
-		slog.Info("reconstruct compressed file", "name", lewpath.New(cwd, dest).String())
+		src, err := resolve(source)
+		if err != nil {
+			return err
+		}
+		dst, err := resolve(dest)
+		if err != nil {
+			return err
+		}
 		out, err := fgpack.EncodeWithOptions(ctx, b, options)
 		if err != nil {
 			return err
 		}
+		slog.Info("fgpack", "src", src, "dst", dst, "in", len(b), "out", len(out))
 		return put(dest, out)
 	case "x.exe", "xdelta.exe", "xdelta3.exe":
 		var source string
