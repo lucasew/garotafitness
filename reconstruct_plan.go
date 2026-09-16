@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"iter"
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness/setupdata"
@@ -19,6 +21,14 @@ type reconstructionPlan struct {
 	remaining map[string]int
 	decoded   map[string]*reconstruction
 	seen      map[string]bool
+	mu        sync.Mutex
+	incoming  <-chan decodedVol
+}
+
+type decodedVol struct {
+	name   string
+	staged *reconstruction
+	err    error
 }
 
 func newStaging() *reconstruction {
@@ -197,27 +207,22 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 	var staged *reconstruction
 	if strings.HasPrefix(source, "src/") {
 		name := strings.TrimPrefix(source, "src/")
-		v, ok := p.volumes[name]
-		if !ok {
+		if _, ok := p.volumes[name]; !ok {
 			if op.Optional {
 				return nil
 			}
 			return fmt.Errorf("reconstruction: missing required volume %s", name)
 		}
-		staged = p.decoded[name]
-		if staged == nil {
-			slog.Info("extract volume", "name", name)
-			staged = newStaging()
-			if err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, v); err != nil {
-				return err
-			}
-			p.decoded[name] = staged
-			p.seen[name] = true
+		staged, err = p.waitDecoded(ctx, name)
+		if err != nil {
+			return err
 		}
+		p.mu.Lock()
 		p.remaining[name]--
 		if p.remaining[name] <= 0 {
 			delete(p.decoded, name)
 		}
+		p.mu.Unlock()
 	} else {
 		data, err := p.read(source)
 		if err != nil {
@@ -272,6 +277,8 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 			}
 		}
 	}
+	stop := p.prefetch(ctx, ops)
+	defer stop()
 	for i, op := range ops {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -306,4 +313,84 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 		}
 	}
 	return nil
+}
+
+func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Operation) func() {
+	ch := make(chan decodedVol)
+	p.incoming = ch
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer close(ch)
+		_ = each(ctx, srcVolumes(ops, p.volumes), func(ctx context.Context, name string) error {
+			slog.Info("extract volume", "name", name)
+			staged := newStaging()
+			err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name])
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case ch <- decodedVol{name: name, staged: staged, err: err}:
+				return err
+			}
+		})
+	}()
+	return func() {
+		cancel()
+		<-done
+	}
+}
+
+func (p *reconstructionPlan) waitDecoded(ctx context.Context, name string) (*reconstruction, error) {
+	for {
+		p.mu.Lock()
+		staged := p.decoded[name]
+		if staged != nil {
+			p.seen[name] = true
+			p.mu.Unlock()
+			return staged, nil
+		}
+		p.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case dv, ok := <-p.incoming:
+			if !ok {
+				return nil, fmt.Errorf("reconstruction: missing %s", name)
+			}
+			if dv.err != nil {
+				return nil, dv.err
+			}
+			p.mu.Lock()
+			p.decoded[dv.name] = dv.staged
+			p.seen[dv.name] = true
+			p.mu.Unlock()
+		}
+	}
+}
+
+func srcVolumes(ops []setupdata.Operation, have map[string]Volume) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		seen := map[string]bool{}
+		for _, op := range ops {
+			if op.Kind != "extract" {
+				continue
+			}
+			source, err := virtualPath(op.Source, "")
+			if err != nil {
+				continue
+			}
+			name, ok := strings.CutPrefix(source, "src/")
+			if !ok || seen[name] {
+				continue
+			}
+			if _, exists := have[name]; !exists {
+				continue
+			}
+			seen[name] = true
+			if !yield(name) {
+				return
+			}
+		}
+	}
 }

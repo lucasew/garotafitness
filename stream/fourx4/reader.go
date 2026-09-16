@@ -8,11 +8,16 @@ package fourx4
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
+	"sync"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const version = 0
@@ -36,7 +41,7 @@ func NewReader(r io.Reader, params string, inner Inner) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	rd := &reader{src: r, inner: inner, name: name, iparams: iparams}
+	rd := &reader{src: r, inner: inner, name: name, iparams: iparams, threads: parseThreads(params)}
 	if err := rd.readVersion(); err != nil {
 		return nil, err
 	}
@@ -48,10 +53,31 @@ type reader struct {
 	inner   Inner
 	name    string
 	iparams string
-	buf     []byte
-	off     int
-	err     error
-	eof     bool
+	threads int
+
+	buf []byte
+	off int
+	err error
+	eof bool
+
+	start   sync.Once
+	cancel  context.CancelFunc
+	results <-chan block
+	hold    map[int][]byte
+	want    int
+}
+
+type job struct {
+	seq     int
+	in      []byte
+	outSize uint32
+	stored  bool
+}
+
+type block struct {
+	seq int
+	out []byte
+	err error
 }
 
 func (r *reader) readVersion() error {
@@ -74,11 +100,15 @@ func (r *reader) Read(p []byte) (int, error) {
 	if r.err != nil && r.off >= len(r.buf) {
 		return 0, r.err
 	}
+	if r.eof && r.off >= len(r.buf) {
+		return 0, io.EOF
+	}
+	r.start.Do(r.launch)
 	for r.off >= len(r.buf) {
 		if r.eof {
 			return 0, io.EOF
 		}
-		block, err := r.next()
+		out, err := r.take()
 		if err == io.EOF {
 			r.eof = true
 			return 0, io.EOF
@@ -87,7 +117,7 @@ func (r *reader) Read(p []byte) (int, error) {
 			r.err = err
 			return 0, err
 		}
-		r.buf = block
+		r.buf = out
 		r.off = 0
 	}
 	n := copy(p, r.buf[r.off:])
@@ -96,42 +126,140 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 func (r *reader) Close() error {
+	if r.cancel != nil {
+		r.cancel()
+	}
 	r.err = errClosed
 	r.buf = nil
 	return nil
 }
 
-func (r *reader) next() ([]byte, error) {
+func (r *reader) launch() {
+	n := max(1, r.threads)
+	ctx, cancel := context.WithCancel(context.Background())
+	r.cancel = cancel
+	r.hold = map[int][]byte{}
+	jobs := make(chan job)
+	results := make(chan block)
+	r.results = results
+	g, ctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		defer close(jobs)
+		for seq := 0; ; seq++ {
+			j, err := r.readJob(seq)
+			if err == io.EOF {
+				return nil
+			}
+			if err != nil {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case results <- block{seq: seq, err: err}:
+					return err
+				}
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case jobs <- j:
+			}
+		}
+	})
+	for range n {
+		g.Go(func() error {
+			for j := range jobs {
+				out, err := r.decode(j)
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case results <- block{seq: j.seq, out: out, err: err}:
+				}
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+	}
+	go func() {
+		_ = g.Wait()
+		close(results)
+	}()
+}
+
+func (r *reader) take() ([]byte, error) {
+	if out, ok := r.hold[r.want]; ok {
+		delete(r.hold, r.want)
+		r.want++
+		return out, nil
+	}
+	for b := range r.results {
+		if b.err != nil {
+			return nil, b.err
+		}
+		if b.seq == r.want {
+			r.want++
+			return b.out, nil
+		}
+		r.hold[b.seq] = b.out
+		if out, ok := r.hold[r.want]; ok {
+			delete(r.hold, r.want)
+			r.want++
+			return out, nil
+		}
+	}
+	return nil, io.EOF
+}
+
+func (r *reader) readJob(seq int) (job, error) {
 	var hdr [8]byte
 	n, err := io.ReadFull(r.src, hdr[:])
 	if n == 0 && (err == io.EOF || err == io.ErrUnexpectedEOF) {
-		return nil, io.EOF
+		return job{}, io.EOF
 	}
 	if err != nil {
-		return nil, fmt.Errorf("fourx4: block header: %w", err)
+		return job{}, fmt.Errorf("fourx4: block header: %w", err)
 	}
 	outSize := binary.LittleEndian.Uint32(hdr[0:4])
 	inSize := binary.LittleEndian.Uint32(hdr[4:8])
 	if inSize > 0x7fffffff || (outSize != storedOut && outSize > 0x7fffffff) {
-		return nil, errTooLarge
+		return job{}, errTooLarge
 	}
 	in := make([]byte, inSize)
 	if _, err := io.ReadFull(r.src, in); err != nil {
-		return nil, fmt.Errorf("fourx4: block: %w", err)
+		return job{}, fmt.Errorf("fourx4: block: %w", err)
 	}
-	if outSize == storedOut {
-		return in, nil
+	return job{seq: seq, in: in, outSize: outSize, stored: outSize == storedOut}, nil
+}
+
+func (r *reader) decode(j job) ([]byte, error) {
+	if j.stored {
+		return j.in, nil
 	}
-	ir, err := r.inner(bytes.NewReader(in), r.name, r.iparams)
+	ir, err := r.inner(bytes.NewReader(j.in), r.name, r.iparams)
 	if err != nil {
 		return nil, err
 	}
 	defer ir.Close()
-	out := make([]byte, outSize)
+	out := make([]byte, j.outSize)
 	if _, err := io.ReadFull(ir, out); err != nil {
 		return nil, fmt.Errorf("fourx4: inner: %w", err)
 	}
 	return out, nil
+}
+
+func parseThreads(params string) int {
+	n := runtime.GOMAXPROCS(0)
+	for _, p := range strings.Split(params, ":") {
+		if len(p) < 2 || p[0] != 't' || p[1] < '0' || p[1] > '9' {
+			continue
+		}
+		v, err := parseInt(p[1:])
+		if err == nil && v > 0 {
+			n = int(v)
+		}
+	}
+	return max(1, n)
 }
 
 // parseInner splits 4x4 options from the inner method. parse_4x4 in C_4x4.cpp:

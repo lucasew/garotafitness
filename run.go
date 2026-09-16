@@ -11,8 +11,15 @@ import (
 // each hands values from in to workers over an unbuffered channel.
 // The first error cancels the rest. Algorithm packages do not call this.
 func each[T any](ctx context.Context, in iter.Seq[T], fn func(context.Context, T) error) error {
+	return eachN(ctx, workers(), in, fn)
+}
+
+func eachN[T any](ctx context.Context, n int, in iter.Seq[T], fn func(context.Context, T) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if n < 1 {
+		n = 1
 	}
 	g, ctx := errgroup.WithContext(ctx)
 	ch := make(chan T)
@@ -27,7 +34,7 @@ func each[T any](ctx context.Context, in iter.Seq[T], fn func(context.Context, T
 		}
 		return nil
 	})
-	for range workers() {
+	for range n {
 		g.Go(func() error {
 			for v := range ch {
 				if err := ctx.Err(); err != nil {
