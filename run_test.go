@@ -3,61 +3,89 @@ package garotafitness
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
 
-func TestRunParallelEmpty(t *testing.T) {
+func TestEachEmpty(t *testing.T) {
 	t.Parallel()
-	require.NoError(t, runParallel(t.Context(), nil))
+	require.NoError(t, each(t.Context(), slices.Values([]int(nil)), func(context.Context, int) error {
+		t.Fatal("ran")
+		return nil
+	}))
 }
 
-func TestRunParallelOne(t *testing.T) {
+func TestEachOne(t *testing.T) {
 	t.Parallel()
 	var n atomic.Int32
-	err := runParallel(t.Context(), []func(context.Context) error{
-		func(context.Context) error {
-			n.Add(1)
-			return nil
-		},
+	err := each(t.Context(), slices.Values([]int{7}), func(_ context.Context, v int) error {
+		n.Add(int32(v))
+		return nil
 	})
 	require.NoError(t, err)
-	require.Equal(t, int32(1), n.Load())
+	require.Equal(t, int32(7), n.Load())
 }
 
-func TestRunParallelMany(t *testing.T) {
+func TestEachMany(t *testing.T) {
 	t.Parallel()
-	const want = 16
 	var n atomic.Int32
-	fns := make([]func(context.Context) error, want)
-	for i := range fns {
-		fns[i] = func(context.Context) error {
-			n.Add(1)
-			return nil
+	seq := func(yield func(int) bool) {
+		for i := 0; i < 16; i++ {
+			if !yield(i) {
+				return
+			}
 		}
 	}
-	require.NoError(t, runParallel(t.Context(), fns))
-	require.Equal(t, int32(want), n.Load())
+	require.NoError(t, each(t.Context(), seq, func(context.Context, int) error {
+		n.Add(1)
+		return nil
+	}))
+	require.Equal(t, int32(16), n.Load())
 }
 
-func TestRunParallelFirstError(t *testing.T) {
+func TestEachFirstError(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
-	err := runParallel(t.Context(), []func(context.Context) error{
-		func(context.Context) error { return boom },
-		func(ctx context.Context) error { return ctx.Err() },
+	err := each(t.Context(), slices.Values([]int{1, 2, 3, 4}), func(_ context.Context, v int) error {
+		if v == 1 {
+			return boom
+		}
+		return nil
 	})
 	require.ErrorIs(t, err, boom)
 }
 
-func TestRunParallelCanceled(t *testing.T) {
+func TestEachCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := runParallel(ctx, []func(context.Context) error{
-		func(context.Context) error { return errors.New("should not run") },
+	err := each(ctx, slices.Values([]int{1}), func(context.Context, int) error {
+		return errors.New("should not run")
 	})
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestEachStopsProducer(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("boom")
+	var yielded atomic.Int32
+	seq := func(yield func(int) bool) {
+		for i := 0; i < 256; i++ {
+			yielded.Add(1)
+			if !yield(i) {
+				return
+			}
+		}
+	}
+	err := each(t.Context(), seq, func(_ context.Context, v int) error {
+		if v == 0 {
+			return boom
+		}
+		return nil
+	})
+	require.ErrorIs(t, err, boom)
+	require.Less(t, yielded.Load(), int32(256))
 }

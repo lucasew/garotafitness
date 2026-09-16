@@ -28,7 +28,7 @@ func TestSongsOfConquestXT3UMembers(t *testing.T) {
 	v, err := parseVolume("fg-03.bin", data)
 	require.NoError(t, err)
 	var s *solid
-	for _, g := range groupSolids(v.Members) {
+	for g := range groupSolids(v.Members) {
 		if g.pipe.String() == "xt3u+srep:m3yf+magic2" {
 			cp := g
 			s = &cp

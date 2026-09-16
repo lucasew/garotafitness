@@ -37,35 +37,39 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 	type job struct {
 		file, sum, name string
 	}
-	jobs := make([]job, 0, len(want))
-	for file, sum := range want {
-		v, ok := have[file]
-		if !ok {
-			flag, known := optional[file]
-			if !known {
-				flag = strings.Contains(strings.ToLower(file), optionalMark)
-			}
-			if flag {
+	for file := range want {
+		if _, ok := have[file]; ok {
+			continue
+		}
+		flag, known := optional[file]
+		if !known {
+			flag = strings.Contains(strings.ToLower(file), optionalMark)
+		}
+		if flag {
+			continue
+		}
+		return fmt.Errorf("checksum: missing %s", file)
+	}
+	return each(ctx, func(yield func(job) bool) {
+		for file, sum := range want {
+			v, ok := have[file]
+			if !ok {
 				continue
 			}
-			return fmt.Errorf("checksum: missing %s", file)
-		}
-		jobs = append(jobs, job{file: file, sum: sum, name: v.Name})
-	}
-	fns := make([]func(context.Context) error, len(jobs))
-	for i, j := range jobs {
-		fns[i] = func(ctx context.Context) error {
-			got, err := hashFile(ctx, src, j.name)
-			if err != nil {
-				return err
+			if !yield(job{file: file, sum: sum, name: v.Name}) {
+				return
 			}
-			if got != j.sum {
-				return fmt.Errorf("checksum: %s mismatch", j.file)
-			}
-			return nil
 		}
-	}
-	return runParallel(ctx, fns)
+	}, func(ctx context.Context, j job) error {
+		got, err := hashFile(ctx, src, j.name)
+		if err != nil {
+			return err
+		}
+		if got != j.sum {
+			return fmt.Errorf("checksum: %s mismatch", j.file)
+		}
+		return nil
+	})
 }
 
 func parseMD5(r io.Reader) (map[string]string, error) {

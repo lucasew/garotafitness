@@ -38,7 +38,7 @@ func TestSongsOfConquestPrefHeader(t *testing.T) {
 	require.NoError(t, err)
 	v, err := parseVolume("fg-optional-bonus-content.bin", data)
 	require.NoError(t, err)
-	for _, s := range groupSolids(v.Members) {
+	for s := range groupSolids(v.Members) {
 		if s.pipe.String() != "pref+srep:m3yf+magic2" {
 			continue
 		}
@@ -96,7 +96,7 @@ func TestExtractSongsOfConquestPref(t *testing.T) {
 	require.NoError(t, err)
 	dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
 	found := false
-	for _, s := range groupSolids(v.Members) {
+	for s := range groupSolids(v.Members) {
 		if !strings.Contains(s.pipe.String(), "pref") {
 			continue
 		}

@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"iter"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -117,12 +119,12 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 		}
 	}
 	slog.Info("write reconstructed tree", "dirs", len(s.dirs), "files", len(s.files))
-	for _, name := range sortedKeys(s.dirs) {
+	for name := range sortedKeys(s.dirs) {
 		if err := e.Dest.MkdirAll(name, s.dirs[name]); err != nil {
 			return err
 		}
 	}
-	for _, name := range sortedKeys(s.files) {
+	for name := range sortedKeys(s.files) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -135,13 +137,8 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 	return nil
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	names := make([]string, 0, len(m))
-	for name := range m {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	return names
+func sortedKeys[V any](m map[string]V) iter.Seq[string] {
+	return slices.Values(slices.Sorted(maps.Keys(m)))
 }
 
 func (s *reconstruction) verifyInstalled(ctx context.Context, manifest, directory string) error {

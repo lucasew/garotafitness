@@ -8,6 +8,7 @@ import (
 	"hash/crc32"
 	"io"
 	"io/fs"
+	"iter"
 	"log/slog"
 
 	"github.com/lucasew/garotafitness/setupdata"
@@ -120,17 +121,10 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 	return extractSolids(ctx, e, data, groupSolids(parsed.Members))
 }
 
-func extractSolids(ctx context.Context, e Extractor, data []byte, solids []solid) error {
-	fns := make([]func(context.Context) error, len(solids))
-	for i, s := range solids {
-		fns[i] = func(ctx context.Context) error {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
-			return extractSolid(ctx, e, data, s)
-		}
-	}
-	return runParallel(ctx, fns)
+func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid]) error {
+	return each(ctx, solids, func(ctx context.Context, s solid) error {
+		return extractSolid(ctx, e, data, s)
+	})
 }
 
 type solid struct {
@@ -140,32 +134,34 @@ type solid struct {
 	files []Member
 }
 
-func groupSolids(ms []Member) []solid {
-	type key struct {
-		pipe string
-		off  int64
-		csz  uint64
-	}
-	order := make([]key, 0)
-	by := make(map[key]*solid)
-	for _, m := range ms {
-		if m.Dir {
-			continue
+func groupSolids(ms []Member) iter.Seq[solid] {
+	return func(yield func(solid) bool) {
+		type key struct {
+			pipe string
+			off  int64
+			csz  uint64
 		}
-		k := key{m.Pipeline.String(), m.Offset, m.CompSize}
-		s, ok := by[k]
-		if !ok {
-			s = &solid{pipe: m.Pipeline, off: m.Offset, csz: m.CompSize}
-			by[k] = s
-			order = append(order, k)
+		order := make([]key, 0)
+		by := make(map[key]*solid)
+		for _, m := range ms {
+			if m.Dir {
+				continue
+			}
+			k := key{m.Pipeline.String(), m.Offset, m.CompSize}
+			s, ok := by[k]
+			if !ok {
+				s = &solid{pipe: m.Pipeline, off: m.Offset, csz: m.CompSize}
+				by[k] = s
+				order = append(order, k)
+			}
+			s.files = append(s.files, m)
 		}
-		s.files = append(s.files, m)
+		for _, k := range order {
+			if !yield(*by[k]) {
+				return
+			}
+		}
 	}
-	out := make([]solid, 0, len(order))
-	for _, k := range order {
-		out = append(out, *by[k])
-	}
-	return out
 }
 
 func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error {

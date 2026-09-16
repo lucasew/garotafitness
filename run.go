@@ -2,31 +2,42 @@ package garotafitness
 
 import (
 	"context"
+	"iter"
 	"runtime"
 
 	"golang.org/x/sync/errgroup"
 )
 
-// runParallel runs independent extract units. The first error cancels the rest.
-// Algorithm packages keep a synchronous NewReader and do not call this.
-func runParallel(ctx context.Context, fns []func(context.Context) error) error {
+// each hands values from in to workers over an unbuffered channel.
+// The first error cancels the rest. Algorithm packages do not call this.
+func each[T any](ctx context.Context, in iter.Seq[T], fn func(context.Context, T) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	switch len(fns) {
-	case 0:
-		return nil
-	case 1:
-		return fns[0](ctx)
-	}
 	g, ctx := errgroup.WithContext(ctx)
-	g.SetLimit(workers())
-	for _, fn := range fns {
-		g.Go(func() error {
-			if err := ctx.Err(); err != nil {
-				return err
+	ch := make(chan T)
+	g.Go(func() error {
+		defer close(ch)
+		for v := range in {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case ch <- v:
 			}
-			return fn(ctx)
+		}
+		return nil
+	})
+	for range workers() {
+		g.Go(func() error {
+			for v := range ch {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				if err := fn(ctx, v); err != nil {
+					return err
+				}
+			}
+			return nil
 		})
 	}
 	return g.Wait()
