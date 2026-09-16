@@ -21,7 +21,7 @@ func Remux(ctx context.Context, dst io.Writer, src io.Reader) error {
 		return fmt.Errorf("fsb: nil input or output")
 	}
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	defer rt.Close(context.Background())
+	defer rt.Close(context.WithoutCancel(ctx))
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		return fmt.Errorf("fsb: wasi: %w", err)
 	}
@@ -41,9 +41,6 @@ func Remux(ctx context.Context, dst io.Writer, src io.Reader) error {
 func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
 	if src == nil {
 		return nil, fmt.Errorf("fsb: nil reader")
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	r, w := io.Pipe()

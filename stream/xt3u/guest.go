@@ -36,9 +36,6 @@ func openGuest(ctx context.Context) (*lz4guest, error) {
 	if len(guestWASM) == 0 {
 		return nil, errGuest
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "xt3u", wasmrun.Emscripten(nil), wazero.NewModuleConfig().
 		WithName(fmt.Sprintf("xt3u-%d", instID.Add(1))))
 	if err != nil {

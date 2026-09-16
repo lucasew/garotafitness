@@ -37,9 +37,6 @@ func NewReader(ctx context.Context, r io.Reader, params string, inner Inner) (io
 	if inner == nil {
 		return nil, errNilInner
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	name, iparams, err := parseInner(params)
 	if err != nil {
 		return nil, err

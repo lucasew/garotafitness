@@ -23,9 +23,6 @@ import (
 // The root package owns this switch. Child packages must not import
 // it. 4x4 takes a func(io.Reader, name, params string) instead.
 func Decode(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error) {
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	switch a.Algo {
 	case Algo4x4:
 		return fourx4.NewReader(ctx, r, a.Params, decodeInner)

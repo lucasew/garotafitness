@@ -27,17 +27,17 @@ func Open(ctx context.Context, cache wazero.CompilationCache, wasm []byte, name 
 		WithCompilationCache(cache))
 	if host != nil {
 		if err := host(ctx, rt); err != nil {
-			rt.Close(ctx)
+			rt.Close(context.WithoutCancel(ctx))
 			return nil, err
 		}
 	}
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
-		rt.Close(ctx)
+		rt.Close(context.WithoutCancel(ctx))
 		return nil, err
 	}
 	compiled, err := rt.CompileModule(ctx, wasm)
 	if err != nil {
-		rt.Close(ctx)
+		rt.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("%s: compile guest: %w", name, err)
 	}
 	if cfg == nil {
@@ -45,7 +45,7 @@ func Open(ctx context.Context, cache wazero.CompilationCache, wasm []byte, name 
 	}
 	mod, err := rt.InstantiateModule(ctx, compiled, cfg.WithStartFunctions("_initialize"))
 	if err != nil {
-		rt.Close(ctx)
+		rt.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("%s: instantiate: %w", name, err)
 	}
 	return &Instance{RT: rt, Mod: mod}, nil
@@ -55,6 +55,7 @@ func (in *Instance) Close(ctx context.Context) error {
 	if in == nil {
 		return nil
 	}
+	ctx = context.WithoutCancel(ctx)
 	var err error
 	if in.Mod != nil {
 		err = in.Mod.Close(ctx)

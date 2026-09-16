@@ -42,9 +42,6 @@ func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	in, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("pref: %w", err)

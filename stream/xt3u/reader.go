@@ -41,9 +41,6 @@ func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	br := bufio.NewReader(r)
 	h, err := parseHeader(br)
 	if err != nil {

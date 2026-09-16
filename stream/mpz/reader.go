@@ -16,9 +16,6 @@ func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
 	h, err := ParseHeader(r)
 	if err != nil {
 		return nil, err
