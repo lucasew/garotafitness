@@ -40,6 +40,7 @@ func getBuf(n int) []byte {
 	}
 	b, _ := bufPool.Get().([]byte)
 	if cap(b) < n {
+		putBuf(b)
 		return make([]byte, n)
 	}
 	return b[:n]
