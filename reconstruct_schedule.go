@@ -83,7 +83,8 @@ func (p *reconstructionPlan) scheduleWords(ctx context.Context, w []string, cwd 
 func (p *reconstructionPlan) scheduleLeaf(ctx context.Context, name string, w []string, cwd string, depth int, reads, writes []string, glob bool, pool taskgroup.PoolKind) error {
 	deps := p.fileDeps(reads, writes, glob)
 	p.pending.Add(1)
-	id := taskgroup.Go(ctx, name, pool, func(ctx context.Context, _ *taskgroup.Status) error {
+	id := taskgroup.Go(ctx, name, pool, func(ctx context.Context, s *taskgroup.Status) error {
+		s.Update(name)
 		defer p.pending.Done()
 		var err error
 		if pool == taskgroup.Control {

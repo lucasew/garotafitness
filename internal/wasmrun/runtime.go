@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
@@ -18,6 +19,7 @@ type Host func(ctx context.Context, rt wazero.Runtime) error
 type Instance struct {
 	RT  wazero.Runtime
 	Mod api.Module
+	lw  io.WriteCloser
 }
 
 // Open compiles wasm through cache and instantiates it on a new Runtime.
@@ -40,15 +42,20 @@ func Open(ctx context.Context, cache wazero.CompilationCache, wasm []byte, name 
 		rt.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("%s: compile guest: %w", name, err)
 	}
+	var lw io.WriteCloser
 	if cfg == nil {
-		cfg = wazero.NewModuleConfig().WithStdout(io.Discard).WithStderr(io.Discard)
+		lw = taskgroup.LineWriterFrom(ctx)
+		cfg = wazero.NewModuleConfig().WithStdout(io.Discard).WithStderr(lw)
 	}
 	mod, err := rt.InstantiateModule(ctx, compiled, cfg.WithStartFunctions("_initialize"))
 	if err != nil {
+		if lw != nil {
+			lw.Close()
+		}
 		rt.Close(context.WithoutCancel(ctx))
 		return nil, fmt.Errorf("%s: instantiate: %w", name, err)
 	}
-	return &Instance{RT: rt, Mod: mod}, nil
+	return &Instance{RT: rt, Mod: mod, lw: lw}, nil
 }
 
 func (in *Instance) Close(ctx context.Context) error {
@@ -57,8 +64,14 @@ func (in *Instance) Close(ctx context.Context) error {
 	}
 	ctx = context.WithoutCancel(ctx)
 	var err error
+	if in.lw != nil {
+		err = in.lw.Close()
+		in.lw = nil
+	}
 	if in.Mod != nil {
-		err = in.Mod.Close(ctx)
+		if e := in.Mod.Close(ctx); e != nil && err == nil {
+			err = e
+		}
 		in.Mod = nil
 	}
 	if in.RT != nil {

@@ -342,7 +342,8 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 				PoolKind: taskgroup.CPU,
 				Items:    names,
 				TaskName: func(_ int, name string) string { return name },
-				Fn: func(ctx context.Context, _ *taskgroup.Status, name string) error {
+				Fn: func(ctx context.Context, s *taskgroup.Status, name string) error {
+					s.Update(name)
 					slog.Info("extract volume", "name", name)
 					staged := newStaging()
 					err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name])

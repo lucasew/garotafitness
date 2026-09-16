@@ -75,7 +75,8 @@ func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
 			PoolKind: taskgroup.CPU,
 			Items:    vols,
 			TaskName: func(_ int, v Volume) string { return v.Name },
-			Fn: func(ctx context.Context, _ *taskgroup.Status, v Volume) error {
+			Fn: func(ctx context.Context, s *taskgroup.Status, v Volume) error {
+				s.Update(v.Name)
 				return extractVolume(ctx, e, v)
 			},
 		}.Run(ctx)
