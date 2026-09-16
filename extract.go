@@ -76,7 +76,6 @@ func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
 			Items:    vols,
 			TaskName: func(_ int, v Volume) string { return v.Name },
 			Fn: func(ctx context.Context, s *taskgroup.Status, v Volume) error {
-				s.Update(v.Name)
 				return extractVolume(ctx, e, v, s)
 			},
 		}.Run(ctx)
@@ -111,6 +110,24 @@ func (p *byteProgress) add(n int64) {
 	}
 	p.done += n
 	p.s.Progress(p.done, p.total)
+}
+
+func (p *byteProgress) member(name string) {
+	if p == nil || p.s == nil {
+		return
+	}
+	p.s.Update(name)
+}
+
+type countReader struct {
+	r io.Reader
+	p *byteProgress
+}
+
+func (c countReader) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	c.p.add(int64(n))
+	return n, err
 }
 
 func extractVolume(ctx context.Context, e Extractor, v Volume, st *taskgroup.Status) error {
@@ -153,9 +170,12 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 }
 
 func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid], prog *byteProgress) error {
-	return each(ctx, solids, func(ctx context.Context, s solid) error {
-		return extractSolid(ctx, e, data, s, prog)
-	})
+	for s := range solids {
+		if err := extractSolid(ctx, e, data, s, prog); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 type solid struct {
@@ -224,14 +244,21 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid, prog *
 		closers = append(closers, r)
 		src = r
 	}
+	if prog != nil && prog.s != nil {
+		prog.s.Update(s.pipe.String())
+	}
 	for _, m := range s.files {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := writeMember(ctx, e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
+		prog.member(m.Path)
+		in := io.Reader(io.LimitReader(src, int64(m.Size)))
+		if prog != nil {
+			in = countReader{r: in, p: prog}
+		}
+		if err := writeMember(ctx, e.Dest, m, in); err != nil {
 			return err
 		}
-		prog.add(int64(m.Size))
 	}
 	var extra [1]byte
 	if _, err := io.ReadFull(src, extra[:]); err != io.EOF {
