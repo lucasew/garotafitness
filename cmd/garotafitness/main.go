@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -27,10 +26,6 @@ func (root) Description() string {
 	return "Extract a local FitGirl repack into a destination tree."
 }
 
-func (*root) Run(context.Context) error {
-	return fmt.Errorf("usage: garotafitness extract SOURCE DEST")
-}
-
 type extractCmd struct {
 	Source cmd.WorkDirArg `help:"repack directory with setup.exe and fg-*.bin volumes"`
 	Dest   cmd.DataDirArg `help:"destination directory"`
@@ -44,7 +39,7 @@ func (c *extractCmd) Run(ctx context.Context) error {
 	srcPath := c.Source.Value()
 	dstPath := c.Dest.Value()
 	if srcPath == "" || dstPath == "" {
-		return fmt.Errorf("usage: garotafitness extract SOURCE DEST")
+		return cmd.ErrUsage
 	}
 	src, err := lewpath.Open(srcPath)
 	if err != nil {
