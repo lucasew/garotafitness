@@ -1,7 +1,6 @@
 package srep
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"encoding/binary"
@@ -30,7 +29,28 @@ var (
 	instID      atomic.Uint64
 )
 
-var compileCache = sync.OnceValue(wazero.NewCompilationCache)
+var (
+	compileCache = sync.OnceValue(wazero.NewCompilationCache)
+	bufPool      sync.Pool
+)
+
+func getBuf(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	b, _ := bufPool.Get().([]byte)
+	if cap(b) < n {
+		return make([]byte, n)
+	}
+	return b[:n]
+}
+
+func putBuf(b []byte) {
+	if b == nil || cap(b) > maxBlock {
+		return
+	}
+	bufPool.Put(b[:0])
+}
 
 func srepHost(ctx context.Context, rt wazero.Runtime) error {
 	return wasmrun.Emscripten(func(b wazero.HostModuleBuilder) {
@@ -121,6 +141,7 @@ func (r *reader) Read(p []byte) (int, error) {
 			r.err = err
 			return 0, err
 		}
+		putBuf(r.buf)
 		r.buf = block
 		r.off = 0
 	}
@@ -139,27 +160,32 @@ func (r *reader) Close() error {
 	err := r.inst.Close(r.ctx)
 	r.mod = nil
 	r.err = errClosed
+	putBuf(r.buf)
 	r.buf = nil
 	return err
 }
 
 func (r *reader) next() ([]byte, error) {
 	hdrSize := 12 + r.hdr.hashLen()
-	hdr := make([]byte, hdrSize)
+	hdr := getBuf(hdrSize)
 	n, err := io.ReadFull(r.src, hdr)
 	if n == 0 && (err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF)) {
+		putBuf(hdr)
 		return nil, io.EOF
 	}
 	if err != nil {
+		putBuf(hdr)
 		return nil, fmt.Errorf("srep: block header: %w", err)
 	}
 	dataSize := binary.LittleEndian.Uint32(hdr[0:4])
 	origSize := binary.LittleEndian.Uint32(hdr[4:8])
 	statSize := binary.LittleEndian.Uint32(hdr[8:12])
 	if dataSize == 0 && origSize == 0 {
+		putBuf(hdr)
 		return nil, io.EOF
 	}
 	if origSize > maxBlock || dataSize > maxBlock || statSize > maxBlock {
+		putBuf(hdr)
 		// fg-01: last literal block is followed by a FreeArc trailer
 		// that is not an SREP header. After a successful stream, stop.
 		if r.start > 0 {
@@ -167,19 +193,25 @@ func (r *reader) next() ([]byte, error) {
 		}
 		return nil, errTooLarge
 	}
-	stat := make([]byte, statSize)
+	putBuf(hdr)
+	stat := getBuf(int(statSize))
 	if statSize > 0 {
 		if _, err := io.ReadFull(r.src, stat); err != nil {
+			putBuf(stat)
 			return nil, fmt.Errorf("srep: stat: %w", err)
 		}
 	}
-	lits := make([]byte, dataSize)
+	lits := getBuf(int(dataSize))
 	if dataSize > 0 {
 		if _, err := io.ReadFull(r.src, lits); err != nil {
+			putBuf(stat)
+			putBuf(lits)
 			return nil, fmt.Errorf("srep: lits: %w", err)
 		}
 	}
 	out, err := r.decode(stat, lits, origSize)
+	putBuf(stat)
+	putBuf(lits)
 	if err != nil {
 		return nil, err
 	}
@@ -223,11 +255,13 @@ func (r *reader) decode(stat, lits []byte, orig uint32) ([]byte, error) {
 	if res[0] != 0 {
 		return nil, errBroken
 	}
-	out, ok := r.mem.Read(outPtr, orig)
+	src, ok := r.mem.Read(outPtr, orig)
 	if !ok {
 		return nil, errGuest
 	}
-	return bytes.Clone(out), nil
+	out := getBuf(int(orig))
+	copy(out, src)
+	return out, nil
 }
 
 func (r *reader) alloc(n uint32) (uint32, error) {

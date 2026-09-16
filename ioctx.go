@@ -3,6 +3,7 @@ package garotafitness
 import (
 	"context"
 	"io"
+	"sync"
 )
 
 type ctxReader struct {
@@ -17,6 +18,13 @@ func (c ctxReader) Read(p []byte) (int, error) {
 	return c.r.Read(p)
 }
 
+var copyBufs = sync.Pool{New: func() any {
+	b := make([]byte, 32<<10)
+	return &b
+}}
+
 func copyCtx(ctx context.Context, dst io.Writer, src io.Reader) (int64, error) {
-	return io.Copy(dst, ctxReader{ctx, src})
+	p := copyBufs.Get().(*[]byte)
+	defer copyBufs.Put(p)
+	return io.CopyBuffer(dst, ctxReader{ctx, src}, *p)
 }
