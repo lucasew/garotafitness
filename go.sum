@@ -2,6 +2,8 @@ github.com/bmatcuk/doublestar/v4 v4.10.0 h1:zU9WiOla1YA122oLM6i4EXvGW62DvKZVxIe6
 github.com/bmatcuk/doublestar/v4 v4.10.0/go.mod h1:xBQ8jztBU6kakFMg+8WGxn0c6z1fTSPVIjEY1Wr7jzc=
 github.com/lewtec/lewkit v0.0.0-20260913142926-fbe1eee8fa14 h1:sbB14QAwXVI3U3qaXOTzq2dUlADs2BiGwSiAbHv4cGQ=
 github.com/lewtec/lewkit v0.0.0-20260913142926-fbe1eee8fa14/go.mod h1:7w4JA8eKMa2Kt4P/tLUvZdp2u0s1UgRGPq7OYaWu9Oc=
+github.com/lewtec/lewkit v0.0.0-20260916013501-bc00a42cf347 h1:4FheS7vIbg5h1/Zl3+ruDdzwQeFxjY+AZSfzy2J4p+w=
+github.com/lewtec/lewkit v0.0.0-20260916013501-bc00a42cf347/go.mod h1:t4nKW5dxWmf/TFnYUvhERhRuPmPxF7mVmMItgeh9wco=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/tetratelabs/wazero v1.12.0 h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=
