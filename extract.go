@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"iter"
 	"log/slog"
+	"slices"
 
 	"github.com/lucasew/garotafitness/setupdata"
 )
@@ -64,15 +65,13 @@ func (e Extractor) extract(ctx context.Context) error {
 		slog.Info("reconstruct from setup metadata")
 		return e.extractReconstructed(ctx, vols, setup)
 	}
-	for _, v := range vols {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := extractVolume(ctx, e, v); err != nil {
-			return err
-		}
-	}
-	return nil
+	return extractVolumes(ctx, e, vols)
+}
+
+func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
+	return each(ctx, slices.Values(vols), func(ctx context.Context, v Volume) error {
+		return extractVolume(ctx, e, v)
+	})
 }
 
 func scanSetup(src fs.FS) ([]string, error) {

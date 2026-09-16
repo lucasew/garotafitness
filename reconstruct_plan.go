@@ -15,20 +15,16 @@ import (
 )
 
 type reconstructionPlan struct {
-	source    fs.FS
-	app, temp *reconstruction
-	volumes   map[string]Volume
-	remaining map[string]int
-	decoded   map[string]*reconstruction
-	seen      map[string]bool
-	mu        sync.Mutex
-	incoming  <-chan decodedVol
-}
-
-type decodedVol struct {
-	name   string
-	staged *reconstruction
-	err    error
+	source     fs.FS
+	app, temp  *reconstruction
+	volumes    map[string]Volume
+	remaining  map[string]int
+	decoded    map[string]*reconstruction
+	seen       map[string]bool
+	mu         sync.Mutex
+	ready      chan struct{}
+	decodeErr  error
+	prefetched bool
 }
 
 func newStaging() *reconstruction {
@@ -316,25 +312,41 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 }
 
 func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Operation) func() {
-	// One slot per in-flight volume so a finished decode does not wait for the op tape.
-	ch := make(chan decodedVol, 16)
-	p.incoming = ch
+	p.ready = make(chan struct{}, 1)
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		defer close(ch)
-		_ = each(ctx, srcVolumes(ops, p.volumes), func(ctx context.Context, name string) error {
+		err := each(ctx, srcVolumes(ops, p.volumes), func(ctx context.Context, name string) error {
 			slog.Info("extract volume", "name", name)
 			staged := newStaging()
 			err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name])
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case ch <- decodedVol{name: name, staged: staged, err: err}:
-				return err
+			p.mu.Lock()
+			if err != nil {
+				if p.decodeErr == nil {
+					p.decodeErr = err
+				}
+			} else {
+				p.decoded[name] = staged
+				p.seen[name] = true
 			}
+			p.mu.Unlock()
+			select {
+			case p.ready <- struct{}{}:
+			default:
+			}
+			return err
 		})
+		p.mu.Lock()
+		if err != nil && p.decodeErr == nil {
+			p.decodeErr = err
+		}
+		p.prefetched = true
+		p.mu.Unlock()
+		select {
+		case p.ready <- struct{}{}:
+		default:
+		}
 	}()
 	return func() {
 		cancel()
@@ -345,27 +357,25 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 func (p *reconstructionPlan) waitDecoded(ctx context.Context, name string) (*reconstruction, error) {
 	for {
 		p.mu.Lock()
-		staged := p.decoded[name]
-		if staged != nil {
+		if p.decodeErr != nil {
+			err := p.decodeErr
+			p.mu.Unlock()
+			return nil, err
+		}
+		if staged := p.decoded[name]; staged != nil {
 			p.seen[name] = true
 			p.mu.Unlock()
 			return staged, nil
 		}
+		done := p.prefetched
 		p.mu.Unlock()
+		if done {
+			return nil, fmt.Errorf("reconstruction: missing %s", name)
+		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case dv, ok := <-p.incoming:
-			if !ok {
-				return nil, fmt.Errorf("reconstruction: missing %s", name)
-			}
-			if dv.err != nil {
-				return nil, dv.err
-			}
-			p.mu.Lock()
-			p.decoded[dv.name] = dv.staged
-			p.seen[dv.name] = true
-			p.mu.Unlock()
+		case <-p.ready:
 		}
 	}
 }

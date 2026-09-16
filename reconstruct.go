@@ -102,10 +102,8 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 	} else {
-		for _, v := range vols {
-			if err := extractVolume(ctx, Extractor{Source: e.Source, Dest: s}, v); err != nil {
-				return err
-			}
+		if err := extractVolumes(ctx, Extractor{Source: e.Source, Dest: s}, vols); err != nil {
+			return err
 		}
 	}
 	if manifestPath != "" {
