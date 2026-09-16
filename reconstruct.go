@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
+	"sync"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lucasew/garotafitness/setupdata"
@@ -20,6 +21,7 @@ import (
 // Intermediates stay in memory: Source remains read-only, and Dest needs no read,
 // seek, rename, or delete operations. Only completed files are written to Dest.
 type reconstruction struct {
+	mu    sync.Mutex
 	files map[string][]byte
 	dirs  map[string]fs.FileMode
 }
@@ -28,7 +30,9 @@ func (s *reconstruction) MkdirAll(name string, mode fs.FileMode) error {
 	if _, err := memberName(name); err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.dirs[name] = mode
+	s.mu.Unlock()
 	return nil
 }
 
@@ -45,7 +49,12 @@ type stagedFile struct {
 	name  string
 }
 
-func (f *stagedFile) Close() error { f.store.files[f.name] = f.Bytes(); return nil }
+func (f *stagedFile) Close() error {
+	f.store.mu.Lock()
+	f.store.files[f.name] = f.Bytes()
+	f.store.mu.Unlock()
+	return nil
+}
 
 func (s *reconstruction) require(name string) ([]byte, error) {
 	b, ok := s.files[name]
@@ -113,16 +122,21 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 	}
-	for _, name := range sortedKeys(s.files) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
+	names := sortedKeys(s.files)
+	fns := make([]func(context.Context) error, len(names))
+	for i, name := range names {
 		b := s.files[name]
-		if err := writeMember(e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b)); err != nil {
-			return err
+		fns[i] = func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return writeMember(e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b))
 		}
-		delete(s.files, name)
 	}
+	if err := runParallel(ctx, fns); err != nil {
+		return err
+	}
+	s.files = map[string][]byte{}
 	return nil
 }
 

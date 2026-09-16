@@ -52,7 +52,7 @@ func (e Extractor) Extract(ctx context.Context) error {
 			vols[i].Optional = flag
 		}
 	}
-	if err := verifyChecksums(e.Source, vols, optional); err != nil {
+	if err := verifyChecksums(ctx, e.Source, vols, optional); err != nil {
 		return err
 	}
 	if setup.InstalledMD5 != "" || len(setup.Operations) != 0 {
@@ -117,15 +117,20 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 			return err
 		}
 	}
-	for _, s := range groupSolids(parsed.Members) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := extractSolid(e, data, s); err != nil {
-			return err
+	return extractSolids(ctx, e, data, groupSolids(parsed.Members))
+}
+
+func extractSolids(ctx context.Context, e Extractor, data []byte, solids []solid) error {
+	fns := make([]func(context.Context) error, len(solids))
+	for i, s := range solids {
+		fns[i] = func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return extractSolid(e, data, s)
 		}
 	}
-	return nil
+	return runParallel(ctx, fns)
 }
 
 type solid struct {

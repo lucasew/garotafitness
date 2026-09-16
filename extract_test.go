@@ -1,6 +1,7 @@
 package garotafitness
 
 import (
+	"fmt"
 	"hash/crc32"
 	"testing"
 	"testing/fstest"
@@ -100,6 +101,47 @@ func TestExtractCRCMismatch(t *testing.T) {
 		},
 	}
 	require.ErrorContains(t, extractSolid(Extractor{Dest: d}, data, s), "crc")
+}
+
+func TestExtractIndependentSolids(t *testing.T) {
+	t.Parallel()
+	d, err := OpenDirDest(t.TempDir())
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, d)
+	data := []byte("helloworld")
+	solids := []solid{
+		{pipe: ParsePipeline("storing"), off: 0, csz: 5, files: []Member{{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
+		{pipe: ParsePipeline("storing"), off: 5, csz: 5, files: []Member{{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
+	}
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: d}, data, solids))
+	got, err := lewpath.New("a.txt").ReadFile(d)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(got))
+	got, err = lewpath.New("b.txt").ReadFile(d)
+	require.NoError(t, err)
+	require.Equal(t, "world", string(got))
+}
+
+func TestExtractIndependentSolidsStaging(t *testing.T) {
+	t.Parallel()
+	s := newStaging()
+	data := make([]byte, 0, 16*5)
+	solids := make([]solid, 16)
+	want := map[string][]byte{}
+	for i := range solids {
+		chunk := []byte(fmt.Sprintf("file%02d", i))[:5]
+		data = append(data, chunk...)
+		name := fmt.Sprintf("f%02d.txt", i)
+		solids[i] = solid{
+			pipe:  ParsePipeline("storing"),
+			off:   int64(i * 5),
+			csz:   5,
+			files: []Member{{Path: name, Size: 5, Pipeline: ParsePipeline("storing")}},
+		}
+		want[name] = append([]byte(nil), chunk...)
+	}
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, data, solids))
+	require.Equal(t, want, s.files)
 }
 
 func TestExtractUnknownEncoder(t *testing.T) {

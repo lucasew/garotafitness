@@ -2,6 +2,7 @@ package garotafitness
 
 import (
 	"bufio"
+	"context"
 	"crypto/md5"
 	"encoding/hex"
 	"errors"
@@ -15,7 +16,7 @@ import (
 
 const checksumName = "MD5/fitgirl-bins.md5"
 
-func verifyChecksums(src fs.FS, vols []Volume, optional map[string]bool) error {
+func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map[string]bool) error {
 	f, err := lewpath.New(checksumName).Open(src)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -33,6 +34,10 @@ func verifyChecksums(src fs.FS, vols []Volume, optional map[string]bool) error {
 	for _, v := range vols {
 		have[lewpath.New(v.Name).Name()] = v
 	}
+	type job struct {
+		file, sum, name string
+	}
+	jobs := make([]job, 0, len(want))
 	for file, sum := range want {
 		v, ok := have[file]
 		if !ok {
@@ -45,15 +50,22 @@ func verifyChecksums(src fs.FS, vols []Volume, optional map[string]bool) error {
 			}
 			return fmt.Errorf("checksum: missing %s", file)
 		}
-		got, err := hashFile(src, v.Name)
-		if err != nil {
-			return err
-		}
-		if got != sum {
-			return fmt.Errorf("checksum: %s mismatch", file)
+		jobs = append(jobs, job{file: file, sum: sum, name: v.Name})
+	}
+	fns := make([]func(context.Context) error, len(jobs))
+	for i, j := range jobs {
+		fns[i] = func(context.Context) error {
+			got, err := hashFile(src, j.name)
+			if err != nil {
+				return err
+			}
+			if got != j.sum {
+				return fmt.Errorf("checksum: %s mismatch", j.file)
+			}
+			return nil
 		}
 	}
-	return nil
+	return runParallel(ctx, fns)
 }
 
 func parseMD5(r io.Reader) (map[string]string, error) {
