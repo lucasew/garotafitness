@@ -26,6 +26,12 @@ type reconstructionPlan struct {
 	ready      chan struct{}
 	decodeErr  error
 	prefetched bool
+	lastWrite  map[string]taskgroup.ID
+	lastUse    map[string]taskgroup.ID
+	prior      []taskgroup.ID
+	unknown    []taskgroup.ID
+	pending    sync.WaitGroup
+	schedErr   error
 }
 
 func newStaging() *reconstruction {
@@ -119,6 +125,8 @@ func (p *reconstructionPlan) read(name string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	return s.require(rel)
 }
 func (p *reconstructionPlan) put(name string, b []byte) error {
@@ -126,6 +134,8 @@ func (p *reconstructionPlan) put(name string, b []byte) error {
 	if err != nil {
 		return err
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if rel == "" || !fs.ValidPath(rel) {
 		return fmt.Errorf("reconstruction: invalid file %s", name)
 	}
@@ -142,6 +152,8 @@ func (p *reconstructionPlan) matches(pattern string, dirs bool) ([]string, error
 	if err != nil {
 		return nil, err
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	root, _, _ := strings.Cut(pattern, "/")
 	var out []string
 	for name := range s.files {
@@ -172,6 +184,8 @@ func (p *reconstructionPlan) remove(name string, tree bool) error {
 	if err != nil {
 		return err
 	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if rel == "" {
 		return fmt.Errorf("reconstruction: cannot remove namespace root")
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -51,6 +52,16 @@ func recipeWords(line string) ([]string, error) {
 }
 
 func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth int) error {
+	p.resetStamps()
+	return withSession(ctx, func(ctx context.Context) error {
+		if err := p.recipeLines(ctx, text, cwd, depth); err != nil {
+			return err
+		}
+		return p.waitScheduled()
+	})
+}
+
+func (p *reconstructionPlan) recipeLines(ctx context.Context, text, cwd string, depth int) error {
 	if depth > 32 {
 		return fmt.Errorf("recursive reconstruction recipe")
 	}
@@ -89,7 +100,7 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 				return err
 			}
 			if len(words) > 0 {
-				if err := p.words(ctx, words, cwd, depth+1); err != nil {
+				if err := p.scheduleWords(ctx, words, cwd, depth+1); err != nil {
 					return fmt.Errorf("recipe %q: %w", part, err)
 				}
 			}
@@ -106,6 +117,7 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 }
 
 func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd string, depth int) error {
+	p.resetStamps()
 	if strings.EqualFold(program, "{cmd}") || strings.EqualFold(lewpath.New(strings.ReplaceAll(program, "\\", "/")).Name(), "cmd.exe") {
 		if len(args) < 3 || !strings.EqualFold(args[:3], "/c ") {
 			return fmt.Errorf("unsupported cmd parameters %q", args)
@@ -116,7 +128,12 @@ func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd str
 	if err != nil {
 		return err
 	}
-	return p.words(ctx, append([]string{program}, words...), cwd, depth+1)
+	return withSession(ctx, func(ctx context.Context) error {
+		if err := p.scheduleWords(ctx, append([]string{program}, words...), cwd, depth+1); err != nil {
+			return err
+		}
+		return p.waitScheduled()
+	})
 }
 
 func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, depth int) error {
@@ -393,7 +410,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			return err
 		}
 		slog.Info("apply update", "patch", a[0], "files", len(records))
-		for _, r := range records {
+		return each(ctx, slices.Values(records), func(ctx context.Context, r x3.Record) error {
 			old, err := read(r.Source)
 			if err != nil {
 				return err
@@ -409,11 +426,8 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			if err := p.remove(source, false); err != nil {
 				return err
 			}
-			if err := put(r.Target, out); err != nil {
-				return err
-			}
-		}
-		return nil
+			return put(r.Target, out)
+		})
 	}
 	if strings.HasSuffix(name, ".bat") || strings.HasSuffix(name, ".cmd") {
 		if len(a) != 0 {
