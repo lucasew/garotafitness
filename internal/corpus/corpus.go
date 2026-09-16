@@ -11,16 +11,26 @@ import (
 
 func Dir(t testing.TB) string {
 	t.Helper()
-	dir := os.Getenv("GAROTAFITNESS_CORPUS")
+	return DirEnv(t, "GAROTAFITNESS_CORPUS")
+}
+
+func DirEnv(t testing.TB, env string) string {
+	t.Helper()
+	dir := os.Getenv(env)
 	if dir == "" {
-		t.Skip("set GAROTAFITNESS_CORPUS")
+		t.Skip("set " + env)
 	}
 	return dir
 }
 
 func Open(t testing.TB) *lewpath.Root {
 	t.Helper()
-	r, err := lewpath.Open(Dir(t))
+	return OpenEnv(t, "GAROTAFITNESS_CORPUS")
+}
+
+func OpenEnv(t testing.TB, env string) *lewpath.Root {
+	t.Helper()
+	r, err := lewpath.Open(DirEnv(t, env))
 	if err != nil {
 		t.Skip("corpus not mounted")
 	}
@@ -30,7 +40,12 @@ func Open(t testing.TB) *lewpath.Root {
 
 func File(t testing.TB, name string) io.ReadSeeker {
 	t.Helper()
-	f, err := lewpath.New(name).Open(Open(t))
+	return FileEnv(t, "GAROTAFITNESS_CORPUS", name)
+}
+
+func FileEnv(t testing.TB, env, name string) io.ReadSeeker {
+	t.Helper()
+	f, err := lewpath.New(name).Open(OpenEnv(t, env))
 	if err != nil {
 		t.Skip("corpus not mounted")
 	}

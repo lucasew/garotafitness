@@ -182,6 +182,16 @@ func (d *decoder) decode(data []byte, s segment) error {
 					block = d.colorIndices(r, width, mask+1)
 				}
 				d.out = append(d.out, block[:]...)
+			case 4:
+				if end-pos < 8 {
+					return errBitstream
+				}
+				width := int(s.aux) * 4
+				if s.option == 5 {
+					width = int(s.aux) * 2
+				}
+				block := d.explicitAlpha(r, width)
+				d.out = append(d.out, block[:]...)
 			case 5:
 				d.out = append(d.out, d.imageByte(r, int(s.aux)))
 			case 6, 7, 8:

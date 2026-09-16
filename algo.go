@@ -13,6 +13,7 @@ const (
 	AlgoSREP
 	Algo4x4
 	AlgoRZW
+	AlgoRZS
 	AlgoMagic2
 	AlgoMPZZ
 	AlgoMPZ
@@ -20,6 +21,8 @@ const (
 	AlgoDelta
 	AlgoREP
 	AlgoPPMD
+	AlgoPref
+	AlgoXT3U
 )
 
 var algoName = [...]string{
@@ -30,6 +33,7 @@ var algoName = [...]string{
 	AlgoSREP:    "srep",
 	Algo4x4:     "4x4",
 	AlgoRZW:     "rzw",
+	AlgoRZS:     "rzs",
 	AlgoMagic2:  "magic2",
 	AlgoMPZZ:    "mpzz",
 	AlgoMPZ:     "mpz",
@@ -37,6 +41,8 @@ var algoName = [...]string{
 	AlgoDelta:   "delta",
 	AlgoREP:     "rep",
 	AlgoPPMD:    "ppmd",
+	AlgoPref:    "pref",
+	AlgoXT3U:    "xt3u",
 }
 
 var algoByName = map[string]Algo{
@@ -47,6 +53,7 @@ var algoByName = map[string]Algo{
 	"4x4":        Algo4x4,
 	"rzw":        AlgoRZW,
 	"rzwb":       AlgoRZW,
+	"rzs":        AlgoRZS,
 	"magic2":     AlgoMagic2,
 	"mpzz":       AlgoMPZZ,
 	"mpz":        AlgoMPZ,
@@ -55,6 +62,8 @@ var algoByName = map[string]Algo{
 	"delta":      AlgoDelta,
 	"rep":        AlgoREP,
 	"ppmd":       AlgoPPMD,
+	"pref":       AlgoPref,
+	"xt3u":       AlgoXT3U,
 }
 
 // String returns the canonical on-disk name.

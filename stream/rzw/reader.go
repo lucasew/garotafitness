@@ -13,8 +13,10 @@ const (
 	razor   = "CM("
 	version = 5
 	cmLen   = 17 // four magic bytes plus a checksummed six-byte index offset
-	// maxPacked covers fg-03 rzwb (~17 MiB packed) and 4x4 packets.
-	maxPacked = 64 << 20
+	// maxPacked is the wasm32 Dest cap (SPEC AS-02). rzs solids on the
+	// Songs of Conquest volumes are ~500–925 MiB of CM archive.
+	maxPacked = 4<<30 - 1
+	maxPlain  = 4<<30 - 1
 )
 
 // NewReader wraps a RAZOR stream as compress/gzip does.

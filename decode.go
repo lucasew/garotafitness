@@ -10,9 +10,12 @@ import (
 	"github.com/lucasew/garotafitness/stream/magic2"
 	"github.com/lucasew/garotafitness/stream/mpz"
 	"github.com/lucasew/garotafitness/stream/mpzz"
+	"github.com/lucasew/garotafitness/stream/pref"
+	"github.com/lucasew/garotafitness/stream/rzs"
 	"github.com/lucasew/garotafitness/stream/rzw"
 	"github.com/lucasew/garotafitness/stream/srep"
 	"github.com/lucasew/garotafitness/stream/storing"
+	"github.com/lucasew/garotafitness/stream/xt3u"
 )
 
 // Decode wraps r with the atom's decompressor.
@@ -38,8 +41,14 @@ func Decode(r io.Reader, a Atom) (io.ReadCloser, error) {
 		return mpz.NewReader(r)
 	case AlgoRZW:
 		return rzw.NewReader(r)
+	case AlgoRZS:
+		return rzs.NewReader(r)
 	case AlgoMagic2:
 		return magic2.NewReader(r)
+	case AlgoPref:
+		return pref.NewReader(r)
+	case AlgoXT3U:
+		return xt3u.NewReader(r)
 	default:
 		return nil, unknownEncoderError(a)
 	}

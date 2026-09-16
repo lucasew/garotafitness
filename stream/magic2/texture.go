@@ -77,6 +77,59 @@ func (d *decoder) colorIndices(r *entropy, width, blockSize int) [4]byte {
 	return [4]byte{byte(out), byte(out >> 8), byte(out >> 16), byte(out >> 24)}
 }
 
+// BC2 explicit alpha, VA 0x14002bde0 (mixer 4 in jmp table 0xa880).
+// Sixteen 4-bit samples; the CDF at 0x285c00 is indexed by (left, above, diag).
+func explicitAlphaContext(left, above, diag int) int {
+	return (left*256 + above*16 + diag) * 34
+}
+
+func (d *decoder) explicitAlpha(r *entropy, width int) [8]byte {
+	pos := len(d.out)
+	at := func(delta int) int { return int(d.history(pos + delta)) }
+	u32 := func(delta int) uint32 {
+		return uint32(at(delta) | at(delta+1)<<8 | at(delta+2)<<16 | at(delta+3)<<24)
+	}
+	l0, l1 := u32(-16), u32(-12)
+	left := [4]int{int(l0>>12) & 15, int(l0>>28) & 15, int(l1>>12) & 15, int(l1>>28) & 15}
+	var top [4]int
+	if width != 0 {
+		t := u32(-width + 4)
+		top = [4]int{int(t>>16) & 15, int(t>>20) & 15, int(t>>24) & 15, int(t>>28) & 15}
+	}
+	var raw [16]int
+	var bits uint64
+	for y := 0; y < 4; y++ {
+		for x := 0; x < 4; x++ {
+			i := y*4 + x
+			l, a := left[y], top[x]
+			if x != 0 {
+				l = raw[i-1]
+			}
+			if y != 0 {
+				a = raw[i-4]
+			}
+			diag := l
+			switch {
+			case x == 0 && y == 0:
+				diag = left[0]
+			case x == 0:
+				diag = left[y-1]
+			case y == 0:
+				diag = top[x-1]
+			default:
+				diag = raw[i-5]
+			}
+			raw[i] = d.symbol(r, 0x285c00+explicitAlphaContext(l, a, diag), 16, 6)
+			bits |= uint64(raw[i]) << uint(i*4)
+		}
+	}
+	var out [8]byte
+	for i := range out {
+		out[i] = byte(bits >> uint(i*8))
+	}
+	return out
+}
+
 func medianEdge(a, b, c int) int {
 	if c >= max(a, b) {
 		return min(a, b)
