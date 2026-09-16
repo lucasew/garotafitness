@@ -50,7 +50,7 @@ func TestExtractDecodedVolumes(t *testing.T) {
 			}
 			dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
 			e := Extractor{Source: src, Dest: dst}
-			if err := extractVolume(t.Context(), e, Volume{Name: name}); err != nil {
+			if err := extractVolume(t.Context(), e, Volume{Name: name}, nil); err != nil {
 				t.Fatal(err)
 			}
 		})

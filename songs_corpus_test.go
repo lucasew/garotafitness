@@ -101,7 +101,7 @@ func TestExtractSongsOfConquestPref(t *testing.T) {
 			continue
 		}
 		found = true
-		require.NoError(t, extractSolid(t.Context(), Extractor{Source: src, Dest: dst}, data, s))
+		require.NoError(t, extractSolid(t.Context(), Extractor{Source: src, Dest: dst}, data, s, nil))
 		for _, m := range s.files {
 			if m.Dir {
 				continue
@@ -124,7 +124,7 @@ func TestExtractSongsOfConquestVolumes(t *testing.T) {
 	for _, name := range []string{"fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin"} {
 		t.Run(name, func(t *testing.T) {
 			dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
-			require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}))
+			require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}, nil))
 			data, err := lewpath.New(name).ReadFile(src)
 			require.NoError(t, err)
 			v, err := parseVolume(name, data)

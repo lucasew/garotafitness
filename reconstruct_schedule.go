@@ -96,6 +96,7 @@ func (p *reconstructionPlan) scheduleLeaf(ctx context.Context, name string, w []
 	label := leafLabel(name, reads, writes)
 	p.pending.Add(1)
 	id := taskgroup.Go(ctx, label, pool, func(ctx context.Context, s *taskgroup.Status) error {
+		defer s.Unit()()
 		defer p.pending.Done()
 		var err error
 		if pool == taskgroup.Control {

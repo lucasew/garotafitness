@@ -77,7 +77,7 @@ func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
 			TaskName: func(_ int, v Volume) string { return v.Name },
 			Fn: func(ctx context.Context, s *taskgroup.Status, v Volume) error {
 				s.Update(v.Name)
-				return extractVolume(ctx, e, v)
+				return extractVolume(ctx, e, v, s)
 			},
 		}.Run(ctx)
 	})
@@ -100,7 +100,20 @@ func readSetup(src fs.FS) (setupdata.Info, error) {
 	return setupdata.Scan(f)
 }
 
-func extractVolume(ctx context.Context, e Extractor, v Volume) error {
+type byteProgress struct {
+	s           *taskgroup.Status
+	done, total int64
+}
+
+func (p *byteProgress) add(n int64) {
+	if p == nil || p.s == nil || p.total <= 0 {
+		return
+	}
+	p.done += n
+	p.s.Progress(p.done, p.total)
+}
+
+func extractVolume(ctx context.Context, e Extractor, v Volume, st *taskgroup.Status) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -114,28 +127,34 @@ func extractVolume(ctx context.Context, e Extractor, v Volume) error {
 		return fmt.Errorf("read %s: %w", v.Name, err)
 	}
 	slog.Info("read volume", "name", v.Name, "bytes", len(data))
-	return extractVolumeData(ctx, e, v.Name, data)
+	return extractVolumeData(ctx, e, v.Name, data, st)
 }
 
-func extractVolumeData(ctx context.Context, e Extractor, name string, data []byte) error {
+func extractVolumeData(ctx context.Context, e Extractor, name string, data []byte, st *taskgroup.Status) error {
 	parsed, err := parseVolume(name, data)
 	if err != nil {
 		return err
 	}
+	var total int64
 	for _, m := range parsed.Members {
-		if !m.Dir {
+		if m.Dir {
+			if err := e.Dest.MkdirAll(m.Path, 0o755); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := e.Dest.MkdirAll(m.Path, 0o755); err != nil {
-			return err
-		}
+		total += int64(m.Size)
 	}
-	return extractSolids(ctx, e, data, groupSolids(parsed.Members))
+	prog := &byteProgress{s: st, total: total}
+	if st != nil && total > 0 {
+		st.Progress(0, total)
+	}
+	return extractSolids(ctx, e, data, groupSolids(parsed.Members), prog)
 }
 
-func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid]) error {
+func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid], prog *byteProgress) error {
 	return each(ctx, solids, func(ctx context.Context, s solid) error {
-		return extractSolid(ctx, e, data, s)
+		return extractSolid(ctx, e, data, s, prog)
 	})
 }
 
@@ -176,7 +195,7 @@ func groupSolids(ms []Member) iter.Seq[solid] {
 	}
 }
 
-func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error {
+func extractSolid(ctx context.Context, e Extractor, data []byte, s solid, prog *byteProgress) error {
 	if len(s.files) == 0 {
 		return nil
 	}
@@ -212,6 +231,7 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid) error 
 		if err := writeMember(ctx, e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
 			return err
 		}
+		prog.add(int64(m.Size))
 	}
 	var extra [1]byte
 	if _, err := io.ReadFull(src, extra[:]); err != io.EOF {

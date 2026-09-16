@@ -241,7 +241,7 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 		}
 		slog.Info("extract reconstructed archive", "name", source)
 		staged = newStaging()
-		if err := extractVolumeData(ctx, Extractor{Dest: staged}, source, data); err != nil {
+		if err := extractVolumeData(ctx, Extractor{Dest: staged}, source, data, nil); err != nil {
 			return err
 		}
 	}
@@ -346,7 +346,7 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 					s.Update(name)
 					slog.Info("extract volume", "name", name)
 					staged := newStaging()
-					err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name])
+					err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name], s)
 					p.mu.Lock()
 					if err != nil {
 						if p.decodeErr == nil {

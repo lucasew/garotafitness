@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -122,16 +123,24 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 	}
-	for name := range sortedKeys(s.files) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		b := s.files[name]
-		if err := writeMember(ctx, e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b)); err != nil {
-			return err
-		}
-		delete(s.files, name)
+	names := slices.Collect(sortedKeys(s.files))
+	err := withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[string]{
+			Name:     "write dest",
+			PoolKind: taskgroup.IO,
+			Items:    names,
+			TaskName: func(_ int, name string) string { return name },
+			Fn: func(ctx context.Context, st *taskgroup.Status, name string) error {
+				defer st.Unit()()
+				b := s.files[name]
+				return writeMember(ctx, e.Dest, Member{Path: name, Size: uint64(len(b))}, bytes.NewReader(b))
+			},
+		}.Run(ctx)
+	})
+	if err != nil {
+		return err
 	}
+	s.files = map[string][]byte{}
 	return nil
 }
 
@@ -140,12 +149,13 @@ func sortedKeys[V any](m map[string]V) iter.Seq[string] {
 }
 
 func (s *reconstruction) verifyInstalled(ctx context.Context, manifest, directory string) error {
+	type job struct {
+		name string
+		want []byte
+	}
+	var jobs []job
 	sc := bufio.NewScanner(strings.NewReader(manifest))
-	count := 0
 	for sc.Scan() {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
 		line := strings.TrimSuffix(sc.Text(), "\r")
 		if len(line) < 35 || line[32] != ' ' || (line[33] != '*' && line[33] != ' ') {
 			return fmt.Errorf("installed checksum: invalid manifest line")
@@ -154,27 +164,44 @@ func (s *reconstruction) verifyInstalled(ctx context.Context, manifest, director
 		if err != nil {
 			return fmt.Errorf("installed checksum: %w", err)
 		}
-		name := strings.TrimPrefix(resolved, "app/")
 		want, err := hex.DecodeString(line[:32])
 		if err != nil {
 			return fmt.Errorf("installed checksum: %w", err)
 		}
-		b, err := s.require(name)
-		if err != nil {
-			return err
-		}
-		got := md5.Sum(b)
-		if !bytes.Equal(got[:], want) {
-			return fmt.Errorf("installed checksum: %s: %x want %x", name, got, want)
-		}
-		count++
+		jobs = append(jobs, job{name: strings.TrimPrefix(resolved, "app/"), want: want})
 	}
 	if err := sc.Err(); err != nil {
 		return err
 	}
-	if count == 0 {
+	if len(jobs) == 0 {
 		return fmt.Errorf("installed checksum: empty manifest")
 	}
-	slog.Info("installed hashes verified", "files", count)
+	err := withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[job]{
+			Name:     "verify",
+			PoolKind: taskgroup.CPU,
+			Items:    jobs,
+			TaskName: func(_ int, j job) string { return j.name },
+			Fn: func(ctx context.Context, st *taskgroup.Status, j job) error {
+				defer st.Unit()()
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				b, err := s.require(j.name)
+				if err != nil {
+					return err
+				}
+				got := md5.Sum(b)
+				if !bytes.Equal(got[:], j.want) {
+					return fmt.Errorf("installed checksum: %s: %x want %x", j.name, got, j.want)
+				}
+				return nil
+			},
+		}.Run(ctx)
+	})
+	if err != nil {
+		return err
+	}
+	slog.Info("installed hashes verified", "files", len(jobs))
 	return nil
 }
