@@ -10,8 +10,8 @@ import (
 	"io/fs"
 	"iter"
 	"log/slog"
-	"slices"
 
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -69,8 +69,16 @@ func (e Extractor) extract(ctx context.Context) error {
 }
 
 func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
-	return each(ctx, slices.Values(vols), func(ctx context.Context, v Volume) error {
-		return extractVolume(ctx, e, v)
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[Volume]{
+			Name:     "volumes",
+			PoolKind: taskgroup.CPU,
+			Items:    vols,
+			TaskName: func(_ int, v Volume) string { return v.Name },
+			Fn: func(ctx context.Context, _ *taskgroup.Status, v Volume) error {
+				return extractVolume(ctx, e, v)
+			},
+		}.Run(ctx)
 	})
 }
 

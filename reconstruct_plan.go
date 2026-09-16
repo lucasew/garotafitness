@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -317,25 +318,37 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		err := each(ctx, srcVolumes(ops, p.volumes), func(ctx context.Context, name string) error {
-			slog.Info("extract volume", "name", name)
-			staged := newStaging()
-			err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name])
-			p.mu.Lock()
-			if err != nil {
-				if p.decodeErr == nil {
-					p.decodeErr = err
-				}
-			} else {
-				p.decoded[name] = staged
-				p.seen[name] = true
-			}
-			p.mu.Unlock()
-			select {
-			case p.ready <- struct{}{}:
-			default:
-			}
-			return err
+		var names []string
+		for name := range srcVolumes(ops, p.volumes) {
+			names = append(names, name)
+		}
+		err := withSession(ctx, func(ctx context.Context) error {
+			return taskgroup.Each[string]{
+				Name:     "volumes",
+				PoolKind: taskgroup.CPU,
+				Items:    names,
+				TaskName: func(_ int, name string) string { return name },
+				Fn: func(ctx context.Context, _ *taskgroup.Status, name string) error {
+					slog.Info("extract volume", "name", name)
+					staged := newStaging()
+					err := extractVolume(ctx, Extractor{Source: p.source, Dest: staged}, p.volumes[name])
+					p.mu.Lock()
+					if err != nil {
+						if p.decodeErr == nil {
+							p.decodeErr = err
+						}
+					} else {
+						p.decoded[name] = staged
+						p.seen[name] = true
+					}
+					p.mu.Unlock()
+					select {
+					case p.ready <- struct{}{}:
+					default:
+					}
+					return err
+				},
+			}.Run(ctx)
 		})
 		p.mu.Lock()
 		if err != nil && p.decodeErr == nil {

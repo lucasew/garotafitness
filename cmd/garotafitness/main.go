@@ -9,6 +9,7 @@ import (
 	"github.com/lewtec/lewkit/x/cmd"
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/taskgroup"
+	"github.com/lewtec/lewkit/x/taskgroup/progress"
 	"github.com/lucasew/garotafitness"
 )
 
@@ -20,7 +21,8 @@ func main() {
 }
 
 type root struct {
-	Extract *extractCmd `cmd:"extract"`
+	taskgroup.Arg `flatten:"" ctx:"taskgroup"`
+	Extract       *extractCmd `cmd:"extract"`
 }
 
 func (root) Description() string {
@@ -28,7 +30,6 @@ func (root) Description() string {
 }
 
 type extractCmd struct {
-	taskgroup.Arg
 	Source cmd.WorkDirArg `help:"repack directory with setup.exe and fg-*.bin volumes"`
 	Dest   cmd.DataDirArg `help:"destination directory"`
 }
@@ -43,20 +44,33 @@ func (c *extractCmd) Run(ctx context.Context) error {
 	if srcPath == "" || dstPath == "" {
 		return cmd.ErrUsage
 	}
-	sess, ctx := c.Enter(ctx, taskgroup.DefaultLimits())
-	defer sess.Wait()
-	src, err := lewpath.Open(srcPath)
-	if err != nil {
-		return err
+	ctx, stop := context.WithCancel(ctx)
+	defer stop()
+	sess, ctx := enterSession(ctx)
+	return progress.Run(sess, progress.WithStop(ctx, stop), func(ctx context.Context) error {
+		src, err := lewpath.Open(srcPath)
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+		dst, err := garotafitness.OpenDirDest(dstPath)
+		if err != nil {
+			return err
+		}
+		defer dst.Close()
+		slog.Info("extract", "source", src.Name(), "dest", dst.Name())
+		return garotafitness.Extractor{Source: src, Dest: dst}.Extract(ctx)
+	})
+}
+
+func enterSession(ctx context.Context) (*taskgroup.Session, context.Context) {
+	if s := taskgroup.FromContext(ctx); s != nil {
+		return s, ctx
 	}
-	defer src.Close()
-	dst, err := garotafitness.OpenDirDest(dstPath)
-	if err != nil {
-		return err
+	if arg, ok := cmd.Lookup[taskgroup.Arg](ctx, "taskgroup"); ok {
+		return arg.Enter(ctx, taskgroup.DefaultLimits())
 	}
-	defer dst.Close()
-	slog.Info("extract", "source", src.Name(), "dest", dst.Name())
-	return garotafitness.Extractor{Source: src, Dest: dst}.Extract(ctx)
+	return taskgroup.New(ctx, taskgroup.DefaultLimits())
 }
 
 func run(args []string) error {
