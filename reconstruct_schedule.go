@@ -200,6 +200,9 @@ func (p *reconstructionPlan) scheduleLeaf(ctx context.Context, name string, w []
 		} else {
 			err = p.words(ctx, w, cwd, depth)
 		}
+		if err != nil {
+			err = fmt.Errorf("%s: %w", label, err)
+		}
 		p.failSched(err)
 		return err
 	}, deps...)

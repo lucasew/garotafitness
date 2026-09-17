@@ -2,7 +2,9 @@ package garotafitness
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"strings"
 
 	"github.com/lucasew/garotafitness/stream/delta"
 	"github.com/lucasew/garotafitness/stream/dispack"
@@ -23,6 +25,39 @@ import (
 // The root package owns this switch. Child packages must not import
 // it. 4x4 takes a func(io.Reader, name, params string) instead.
 func Decode(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error) {
+	out, err := decodeAtom(ctx, r, a)
+	if err != nil {
+		return nil, annotateAtom(a, err)
+	}
+	return namedDecoder{ReadCloser: out, atom: a}, nil
+}
+
+type namedDecoder struct {
+	io.ReadCloser
+	atom Atom
+}
+
+func (n namedDecoder) Read(p []byte) (int, error) {
+	k, err := n.ReadCloser.Read(p)
+	if err != nil && err != io.EOF {
+		return k, annotateAtom(n.atom, err)
+	}
+	return k, err
+}
+
+func annotateAtom(a Atom, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	name := a.String()
+	if strings.HasPrefix(msg, name+":") || strings.HasPrefix(msg, a.Algo.String()+":") {
+		return err
+	}
+	return fmt.Errorf("%s: %w", a, err)
+}
+
+func decodeAtom(ctx context.Context, r io.Reader, a Atom) (io.ReadCloser, error) {
 	switch a.Algo {
 	case Algo4x4:
 		return fourx4.NewReader(ctx, r, a.Params, decodeInner)
