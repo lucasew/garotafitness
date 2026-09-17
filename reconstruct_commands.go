@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -453,28 +452,34 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			return err
 		}
 		slog.Info("apply update", "patch", a[0], "files", len(records))
-		return eachNamed(ctx, "x3", taskgroup.CPU, slices.Values(records), func(r x3.Record) string { return r.Target }, func(ctx context.Context, r x3.Record) error {
-			old, err := read(r.Source)
-			if err != nil {
-				return err
-			}
-			out, err := r.Apply(ctx, old)
-			if err != nil {
-				return err
-			}
-			source, err := resolve(r.Source)
-			if err != nil {
-				return err
-			}
-			if err := p.remove(source, false); err != nil {
-				return err
-			}
-			if err := put(r.Target, out); err != nil {
-				return err
-			}
-			slog.Info("x3", "src", r.Source, "dst", r.Target, "in", len(old), "out", len(out))
-			return nil
-		})
+		return taskgroup.Each[x3.Record]{
+			Name:     "x3",
+			PoolKind: taskgroup.CPU,
+			Items:    records,
+			TaskName: func(_ int, r x3.Record) string { return r.Target },
+			Fn: func(ctx context.Context, _ *taskgroup.Status, r x3.Record) error {
+				old, err := read(r.Source)
+				if err != nil {
+					return err
+				}
+				out, err := r.Apply(ctx, old)
+				if err != nil {
+					return err
+				}
+				source, err := resolve(r.Source)
+				if err != nil {
+					return err
+				}
+				if err := p.remove(source, false); err != nil {
+					return err
+				}
+				if err := put(r.Target, out); err != nil {
+					return err
+				}
+				slog.Info("x3", "src", r.Source, "dst", r.Target, "in", len(old), "out", len(out))
+				return nil
+			},
+		}.Run(ctx)
 	}
 	if strings.HasSuffix(name, ".bat") || strings.HasSuffix(name, ".cmd") {
 		if len(a) != 0 {

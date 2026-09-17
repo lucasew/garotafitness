@@ -51,25 +51,31 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 		}
 		return fmt.Errorf("checksum: missing %s", file)
 	}
-	return eachPool(ctx, "checksums", taskgroup.IO, func(yield func(job) bool) {
-		for file, sum := range want {
-			v, ok := have[file]
-			if !ok {
-				continue
-			}
-			if !yield(job{file: file, sum: sum, name: v.Name}) {
-				return
-			}
+	var jobs []job
+	for file, sum := range want {
+		v, ok := have[file]
+		if !ok {
+			continue
 		}
-	}, func(j job) string { return j.file }, func(ctx context.Context, j job) error {
-		got, err := hashFile(ctx, src, j.name)
-		if err != nil {
-			return err
-		}
-		if got != j.sum {
-			return fmt.Errorf("checksum: %s mismatch", j.file)
-		}
-		return nil
+		jobs = append(jobs, job{file: file, sum: sum, name: v.Name})
+	}
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[job]{
+			Name:     "checksums",
+			PoolKind: taskgroup.IO,
+			Items:    jobs,
+			TaskName: func(_ int, j job) string { return j.file },
+			Fn: func(ctx context.Context, _ *taskgroup.Status, j job) error {
+				got, err := hashFile(ctx, src, j.name)
+				if err != nil {
+					return err
+				}
+				if got != j.sum {
+					return fmt.Errorf("checksum: %s mismatch", j.file)
+				}
+				return nil
+			},
+		}.Run(ctx)
 	})
 }
 
