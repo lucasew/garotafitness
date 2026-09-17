@@ -74,9 +74,18 @@ func enterSession(ctx context.Context) (*taskgroup.Session, context.Context) {
 func run(args []string) error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	context.AfterFunc(ctx, func() {
+		if err := ctx.Err(); err != nil {
+			slog.Warn("interrupt or parent cancel", "err", err, "cause", context.Cause(ctx))
+		}
+	})
 	app, err := cmd.Parse[cmd.App[root]](args...)
 	if err != nil {
 		return err
 	}
-	return app.Run(ctx)
+	err = app.Run(ctx)
+	if err != nil {
+		slog.Error("extract failed", "err", err, "cause", context.Cause(ctx))
+	}
+	return err
 }

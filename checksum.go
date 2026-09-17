@@ -69,6 +69,7 @@ func checkVolume(ctx context.Context, src fs.FS, j checksumJob) error {
 	}
 	if got != j.sum {
 		err := fmt.Errorf("checksum: %s mismatch", j.file)
+		slog.Error("cancelling extract", "reason", err)
 		if s := taskgroup.FromContext(ctx); s != nil {
 			s.Cancel(err)
 		}

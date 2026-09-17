@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/lucasew/garotafitness/internal/wasmrun"
 	"github.com/tetratelabs/wazero"
@@ -22,7 +21,7 @@ var (
 	compileCache = sync.OnceValue(wazero.NewCompilationCache)
 )
 
-func decodeWASM(parent context.Context, src []byte, h Header) ([]byte, error) {
+func decodeWASM(ctx context.Context, src []byte, h Header) ([]byte, error) {
 	if len(src) == 0 || len(guestWASM) == 0 {
 		return nil, errGuest
 	}
@@ -30,8 +29,6 @@ func decodeWASM(parent context.Context, src []byte, h Header) ([]byte, error) {
 	if orig == 0 {
 		return nil, errGuest
 	}
-	ctx, cancel := context.WithTimeout(parent, 10*time.Minute)
-	defer cancel()
 	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "mpz", wasmrun.Emscripten(nil), wazero.NewModuleConfig().
 		WithName(fmt.Sprintf("mpz-%d", instID.Add(1))))
 	if err != nil {

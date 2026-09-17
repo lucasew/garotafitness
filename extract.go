@@ -37,6 +37,9 @@ func (e Extractor) Extract(ctx context.Context) error {
 }
 
 func (e Extractor) extract(ctx context.Context) error {
+	context.AfterFunc(ctx, func() {
+		slog.Warn("extract context done", "err", ctx.Err(), "cause", context.Cause(ctx))
+	})
 	setup, setupErr := readSetup(e.Source)
 	if err := setupErr; err != nil {
 		return fmt.Errorf("setup.exe: %w", err)
