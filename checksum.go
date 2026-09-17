@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"strings"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
