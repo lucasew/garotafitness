@@ -18,7 +18,11 @@ import (
 //go:embed srepdec.wasm
 var guestWASM []byte
 
-const maxBlock = 8 << 20
+const (
+	maxBlock = 8 << 20
+	minClass = 64
+	numClass = 18 // 64 … 8MiB
+)
 
 var (
 	errNil      = errors.New("srep: nil reader")
@@ -31,26 +35,57 @@ var (
 
 var (
 	compileCache = sync.OnceValue(wazero.NewCompilationCache)
-	bufPool      sync.Pool
+	classPools   [numClass]sync.Pool
 )
+
+func init() {
+	for i := range classPools {
+		size := minClass << i
+		classPools[i].New = func() any {
+			b := make([]byte, size)
+			return &b
+		}
+	}
+}
+
+func classIndex(n int) int {
+	if n <= minClass {
+		return 0
+	}
+	v := n - 1
+	v |= v >> 1
+	v |= v >> 2
+	v |= v >> 4
+	v |= v >> 8
+	v |= v >> 16
+	// v+1 is next power of two; 64 is 2^6
+	pow := v + 1
+	i := 0
+	for p := minClass; p < pow; p <<= 1 {
+		i++
+	}
+	return i
+}
 
 func getBuf(n int) []byte {
 	if n == 0 {
 		return nil
 	}
-	b, _ := bufPool.Get().([]byte)
-	if cap(b) < n {
-		putBuf(b)
+	if n > maxBlock {
 		return make([]byte, n)
 	}
-	return b[:n]
+	bp := classPools[classIndex(n)].Get().(*[]byte)
+	return (*bp)[:n]
 }
 
 func putBuf(b []byte) {
-	if b == nil || cap(b) > maxBlock {
+	c := cap(b)
+	if c < minClass || c > maxBlock || c&(c-1) != 0 {
 		return
 	}
-	bufPool.Put(b[:0])
+	i := classIndex(c)
+	b = b[:c]
+	classPools[i].Put(&b)
 }
 
 func srepHost(ctx context.Context, rt wazero.Runtime) error {
