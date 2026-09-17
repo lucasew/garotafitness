@@ -166,7 +166,18 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 	if st != nil && total > 0 {
 		st.Progress(0, total)
 	}
-	return extractSolids(ctx, e, data, groupSolids(parsed.Members), prog)
+	err = extractSolids(ctx, e, data, groupSolids(parsed.Members), prog)
+	if err != nil {
+		return err
+	}
+	var files int
+	for _, m := range parsed.Members {
+		if !m.Dir {
+			files++
+		}
+	}
+	slog.Info("extracted volume", "name", name, "compressed", len(data), "uncompressed", total, "files", files)
+	return nil
 }
 
 func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid], prog *byteProgress) error {
@@ -259,6 +270,7 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid, prog *
 		if err := writeMember(ctx, e.Dest, m, in); err != nil {
 			return err
 		}
+		slog.Info("extracted", "path", m.Path, "size", m.Size, "pipeline", s.pipe.String())
 	}
 	var extra [1]byte
 	if _, err := io.ReadFull(src, extra[:]); err != io.EOF {
@@ -267,6 +279,11 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid, prog *
 		}
 		return fmt.Errorf("solid contains data after its final member")
 	}
+	var uncompressed uint64
+	for _, m := range s.files {
+		uncompressed += m.Size
+	}
+	slog.Info("extracted solid", "pipeline", s.pipe.String(), "members", len(s.files), "compressed", s.csz, "uncompressed", uncompressed)
 	return nil
 }
 

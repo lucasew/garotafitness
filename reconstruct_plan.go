@@ -265,14 +265,20 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 			}
 		}
 	}
+	var files int
+	var bytes int
 	for name, b := range staged.files {
 		if mapped, ok := mapName(name); ok {
 			if _, err := memberName(mapped); err != nil {
 				return err
 			}
 			store.files[mapped] = b
+			files++
+			bytes += len(b)
+			slog.Info("placed", "path", mapped, "size", len(b), "from", source)
 		}
 	}
+	slog.Info("placed archive", "from", source, "to", dest, "filter", filter, "files", files, "bytes", bytes)
 	return nil
 }
 

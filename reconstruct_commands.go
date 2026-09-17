@@ -188,6 +188,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 				if err := p.remove(n, true); err != nil {
 					return err
 				}
+				slog.Info("removed tree", "path", n)
 				continue
 			}
 			matches, err := p.matches(n, false)
@@ -198,6 +199,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 				if err := p.remove(m, false); err != nil {
 					return err
 				}
+				slog.Info("deleted", "path", m)
 			}
 		}
 		return nil
@@ -230,7 +232,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err := p.remove(source, false); err != nil {
 			return err
 		}
-		return p.put(dest, b)
+		if err := p.put(dest, b); err != nil {
+			return err
+		}
+		slog.Info("moved", "from", source, "to", dest, "size", len(b))
+		return nil
 	case "copy":
 		a = stripFlags(a)
 		if len(a) < 1 || len(a) > 2 {
@@ -306,6 +312,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err := fsb.Remux(ctx, &out, bytes.NewReader(b)); err != nil {
 			return err
 		}
+		slog.Info("fsb", "src", a[0], "dst", a[1], "in", len(b), "out", out.Len())
 		return put(a[1], out.Bytes())
 	case "x2.exe":
 		if len(a) != 2 {
@@ -323,6 +330,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
+		dst, err := resolve(a[0])
+		if err != nil {
+			return err
+		}
+		slog.Info("x2", "file", dst, "patch", a[1], "in", len(old), "out", len(out))
 		return put(a[0], out)
 	case "x5.exe", "hpatchz.exe":
 		if len(a) > 0 && strings.HasPrefix(a[0], "-s-") {
@@ -343,6 +355,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
+		dst, err := resolve(a[2])
+		if err != nil {
+			return err
+		}
+		slog.Info("x5", "old", a[0], "diff", a[1], "dst", dst, "in", len(old), "out", len(out))
 		return put(a[2], out)
 	case "fgpack.exe":
 		options, source, dest, err := packingOptions(a)
@@ -404,6 +421,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
+		dst, err := resolve(files[1])
+		if err != nil {
+			return err
+		}
+		slog.Info("xdelta", "src", source, "diff", files[0], "dst", dst, "in", len(old), "out", len(out))
 		return put(files[1], out)
 	case "x3.exe":
 		if len(a) != 1 {
@@ -434,7 +456,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			if err := p.remove(source, false); err != nil {
 				return err
 			}
-			return put(r.Target, out)
+			if err := put(r.Target, out); err != nil {
+				return err
+			}
+			slog.Info("x3", "src", r.Source, "dst", r.Target, "in", len(old), "out", len(out))
+			return nil
 		})
 	}
 	if strings.HasSuffix(name, ".bat") || strings.HasSuffix(name, ".cmd") {
