@@ -319,7 +319,8 @@ func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, pro
 	for i := len(s.pipe) - 1; i >= 0; i-- {
 		r, err := Decode(ctx, src, s.pipe[i])
 		if err != nil {
-			return err
+			return fmt.Errorf("open %s in pipeline %s (solid offset %d compressed %d): %w",
+				s.pipe[i], s.pipe.String(), s.off, s.csz, err)
 		}
 		closers = append(closers, r)
 		src = r
@@ -337,7 +338,8 @@ func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, pro
 			in = countReader{r: in, p: prog}
 		}
 		if err := writeMember(ctx, e.Dest, m, in); err != nil {
-			return err
+			return fmt.Errorf("extract %s pipeline %s (solid offset %d compressed %d): %w",
+				m.Path, s.pipe.String(), s.off, s.csz, err)
 		}
 		slog.Info("extracted", "path", m.Path, "size", m.Size, "pipeline", s.pipe.String())
 	}
@@ -369,7 +371,7 @@ func writeMember(ctx context.Context, dst Dest, m Member, r io.Reader) error {
 	n, err := copyCtx(ctx, w, io.TeeReader(r, h))
 	if err != nil {
 		w.Close()
-		return fmt.Errorf("write %s: %w", m.Path, err)
+		return fmt.Errorf("decode %s: %w", m.Path, err)
 	}
 	if err := w.Close(); err != nil {
 		return err

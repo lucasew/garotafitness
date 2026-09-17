@@ -656,7 +656,12 @@ func (d *dec) stepA8(kind int) {
 }
 
 func (d *dec) decodeByte() bool {
-	if !d.r.ok() || d.pos >= cap(d.out) {
+	if !d.r.ok() {
+		d.why = "rANS exhausted"
+		return false
+	}
+	if d.pos >= cap(d.out) {
+		d.why = "output limit"
 		return false
 	}
 	ps := d.prevSlot()
@@ -667,6 +672,7 @@ func (d *dec) decodeByte() bool {
 	lit := m.bit(&d.r)
 	if !d.r.ok() {
 		d.r.off, d.r.s0, d.r.s1 = off0, s00, s10
+		d.why = "rANS bit"
 		return false
 	}
 	ps[0] = saNext(ps[0], lit)
