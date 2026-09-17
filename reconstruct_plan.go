@@ -32,6 +32,10 @@ type reconstructionPlan struct {
 	unknown    []taskgroup.ID
 	pending    sync.WaitGroup
 	schedErr   error
+	want       map[string][]byte
+	hashed     map[string]bool
+	ops        []setupdata.Operation
+	opi        int
 }
 
 func newStaging() *reconstruction {
@@ -276,6 +280,9 @@ func (p *reconstructionPlan) extract(ctx context.Context, op setupdata.Operation
 			files++
 			bytes += len(b)
 			slog.Info("placed", "path", mapped, "size", len(b), "from", source)
+			if dest == "app" || strings.HasPrefix(dest, "app/") {
+				p.scheduleHash(ctx, mapped, nil)
+			}
 		}
 	}
 	slog.Info("placed archive", "from", source, "to", dest, "filter", filter, "files", files, "bytes", bytes)
@@ -294,9 +301,11 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 			}
 		}
 	}
+	p.ops = ops
 	stop := p.prefetch(ctx, ops)
 	defer stop()
 	for i, op := range ops {
+		p.opi = i
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -329,7 +338,7 @@ func (p *reconstructionPlan) run(ctx context.Context, ops []setupdata.Operation)
 			return fmt.Errorf("setup reconstruction did not extract required volume %s", name)
 		}
 	}
-	return nil
+	return p.finishHashes(ctx)
 }
 
 func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Operation) func() {

@@ -57,7 +57,13 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 		if err := p.recipeLines(ctx, text, cwd, depth); err != nil {
 			return err
 		}
-		return p.waitScheduled()
+		if err := p.waitScheduled(); err != nil {
+			return err
+		}
+		for path := range p.lastWrite {
+			p.scheduleHash(ctx, path, nil)
+		}
+		return nil
 	})
 }
 
@@ -132,7 +138,13 @@ func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd str
 		if err := p.scheduleWords(ctx, append([]string{program}, words...), cwd, depth+1); err != nil {
 			return err
 		}
-		return p.waitScheduled()
+		if err := p.waitScheduled(); err != nil {
+			return err
+		}
+		for path := range p.lastWrite {
+			p.scheduleHash(ctx, path, nil)
+		}
+		return nil
 	})
 }
 

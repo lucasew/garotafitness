@@ -1,12 +1,16 @@
 package garotafitness
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
 	"github.com/lewtec/lewkit/x/taskgroup"
+	"github.com/lucasew/garotafitness/setupdata"
 )
 
 func (p *reconstructionPlan) resetStamps() {
@@ -15,6 +19,98 @@ func (p *reconstructionPlan) resetStamps() {
 	p.prior = nil
 	p.unknown = nil
 	p.schedErr = nil
+}
+
+func (p *reconstructionPlan) scheduleHash(ctx context.Context, path string, deps []taskgroup.ID) {
+	if p.want == nil {
+		return
+	}
+	sum := p.want[path]
+	if sum == nil || p.hashed[path] || p.laterMayWrite(path) {
+		return
+	}
+	p.hashed[path] = true
+	want := append([]byte(nil), sum...)
+	p.pending.Add(1)
+	_ = withSession(ctx, func(ctx context.Context) error {
+		taskgroup.Go(ctx, "md5 "+path, taskgroup.CPU, func(ctx context.Context, s *taskgroup.Status) error {
+			defer p.pending.Done()
+			defer s.Unit()()
+			if err := ctx.Err(); err != nil {
+				p.failSched(err)
+				return err
+			}
+			b, err := p.read(lewpath.New("app", path).String())
+			if err != nil {
+				p.failSched(err)
+				return err
+			}
+			got := md5.Sum(b)
+			if !bytes.Equal(got[:], want) {
+				err := fmt.Errorf("installed checksum: %s: %x want %x", path, got, want)
+				p.failSched(err)
+				return err
+			}
+			slog.Info("verified", "path", path)
+			return nil
+		}, deps...)
+		return nil
+	})
+}
+
+func (p *reconstructionPlan) laterMayWrite(path string) bool {
+	if p.opi+1 >= len(p.ops) {
+		return false
+	}
+	return opsMayWrite(p.ops[p.opi+1:], path)
+}
+
+func opsMayWrite(ops []setupdata.Operation, path string) bool {
+	for _, op := range ops {
+		if op.Kind != "command" {
+			continue
+		}
+		prog := strings.ToLower(lewpath.New(strings.ReplaceAll(op.Program, "\\", "/")).Name())
+		if prog == "{cmd}" || prog == "cmd.exe" || prog == "run.exe" || prog == "x3.exe" ||
+			strings.HasSuffix(prog, ".bat") || strings.HasSuffix(prog, ".cmd") ||
+			prog == "x.exe" || prog == "xdelta.exe" || prog == "xdelta3.exe" {
+			return true
+		}
+		words, err := recipeWords(op.Args)
+		if err != nil {
+			return true
+		}
+		cwd, err := virtualPath(op.WorkDir, "")
+		if err != nil {
+			return true
+		}
+		_, writes, glob, err := recipeFiles(prog, append([]string{prog}, words...), cwd)
+		if err != nil || glob {
+			return true
+		}
+		for _, w := range writes {
+			if w == path || strings.TrimPrefix(w, "app/") == path {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (p *reconstructionPlan) finishHashes(ctx context.Context) error {
+	for path := range p.want {
+		p.scheduleHash(ctx, path, nil)
+	}
+	if err := p.waitScheduled(); err != nil {
+		return err
+	}
+	for path := range p.want {
+		if !p.hashed[path] {
+			return fmt.Errorf("installed checksum: missing %s", path)
+		}
+	}
+	slog.Info("installed hashes verified", "files", len(p.want))
+	return nil
 }
 
 func (p *reconstructionPlan) waitScheduled() error {

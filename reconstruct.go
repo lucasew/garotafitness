@@ -97,6 +97,12 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 		}
 		manifestPath = strings.TrimPrefix(name, "app/")
 		s.files[manifestPath] = []byte(setup.InstalledMD5)
+		want, err := parseInstalledWant(setup.InstalledMD5, lewpath.New(manifestPath).Parent().String())
+		if err != nil {
+			return err
+		}
+		runner.want = want
+		runner.hashed = map[string]bool{}
 	}
 	if len(setup.Operations) > 0 {
 		if err := runner.run(ctx, setup.Operations); err != nil {
@@ -107,13 +113,9 @@ func (e Extractor) extractReconstructed(ctx context.Context, vols []Volume, setu
 			return err
 		}
 	}
-	if manifestPath != "" {
-		manifest, err := s.require(manifestPath)
-		if err != nil {
-			return err
-		}
-		slog.Info("verify installed checksums", "manifest", manifestPath)
-		if err := s.verifyInstalled(ctx, string(manifest), lewpath.New(manifestPath).Parent().String()); err != nil {
+	if len(runner.want) > 0 {
+		slog.Info("verify installed checksums", "manifest", manifestPath, "files", len(runner.want))
+		if err := runner.finishHashes(ctx); err != nil {
 			return err
 		}
 	}
@@ -148,35 +150,47 @@ func sortedKeys[V any](m map[string]V) iter.Seq[string] {
 	return slices.Values(slices.Sorted(maps.Keys(m)))
 }
 
-func (s *reconstruction) verifyInstalled(ctx context.Context, manifest, directory string) error {
-	type job struct {
-		name string
-		want []byte
-	}
-	var jobs []job
+func parseInstalledWant(manifest, directory string) (map[string][]byte, error) {
+	want := map[string][]byte{}
 	sc := bufio.NewScanner(strings.NewReader(manifest))
 	for sc.Scan() {
 		line := strings.TrimSuffix(sc.Text(), "\r")
 		if len(line) < 35 || line[32] != ' ' || (line[33] != '*' && line[33] != ' ') {
-			return fmt.Errorf("installed checksum: invalid manifest line")
+			return nil, fmt.Errorf("installed checksum: invalid manifest line")
 		}
 		resolved, err := virtualPath(line[34:], lewpath.New("app", directory).String())
 		if err != nil {
-			return fmt.Errorf("installed checksum: %w", err)
+			return nil, fmt.Errorf("installed checksum: %w", err)
 		}
-		want, err := hex.DecodeString(line[:32])
+		sum, err := hex.DecodeString(line[:32])
 		if err != nil {
-			return fmt.Errorf("installed checksum: %w", err)
+			return nil, fmt.Errorf("installed checksum: %w", err)
 		}
-		jobs = append(jobs, job{name: strings.TrimPrefix(resolved, "app/"), want: want})
+		want[strings.TrimPrefix(resolved, "app/")] = sum
 	}
 	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(want) == 0 {
+		return nil, fmt.Errorf("installed checksum: empty manifest")
+	}
+	return want, nil
+}
+
+func (s *reconstruction) verifyInstalled(ctx context.Context, manifest, directory string) error {
+	want, err := parseInstalledWant(manifest, directory)
+	if err != nil {
 		return err
 	}
-	if len(jobs) == 0 {
-		return fmt.Errorf("installed checksum: empty manifest")
+	type job struct {
+		name string
+		want []byte
 	}
-	err := withSession(ctx, func(ctx context.Context) error {
+	jobs := make([]job, 0, len(want))
+	for name, sum := range want {
+		jobs = append(jobs, job{name: name, want: sum})
+	}
+	err = withSession(ctx, func(ctx context.Context) error {
 		return taskgroup.Each[job]{
 			Name:     "verify",
 			PoolKind: taskgroup.CPU,
