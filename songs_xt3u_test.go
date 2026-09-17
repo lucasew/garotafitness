@@ -28,7 +28,7 @@ func TestSongsOfConquestXT3UMembers(t *testing.T) {
 	v, err := parseVolume("fg-03.bin", data)
 	require.NoError(t, err)
 	var s *solid
-	for _, g := range groupSolids(v.Members) {
+	for g := range groupSolids(v.Members) {
 		if g.pipe.String() == "xt3u+srep:m3yf+magic2" {
 			cp := g
 			s = &cp
@@ -46,7 +46,7 @@ func TestSongsOfConquestXT3UMembers(t *testing.T) {
 		}
 	})
 	for i := len(s.pipe) - 1; i >= 0; i-- {
-		dec, err := Decode(r, s.pipe[i])
+		dec, err := Decode(t.Context(), r, s.pipe[i])
 		require.NoError(t, err)
 		closers = append(closers, dec)
 		r = dec

@@ -15,16 +15,16 @@ import (
 
 func TestNewReaderNilShortBadMagic(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(nil); !errors.Is(err, errNil) {
+	if _, err := NewReader(t.Context(), nil); !errors.Is(err, errNil) {
 		t.Fatalf("nil: %v", err)
 	}
-	if _, err := NewReader(bytes.NewReader(nil)); err == nil {
+	if _, err := NewReader(t.Context(), bytes.NewReader(nil)); err == nil {
 		t.Fatal("want short error")
 	}
-	if _, err := NewReader(bytes.NewReader([]byte("XXXX"))); !errors.Is(err, errBadMagic) {
+	if _, err := NewReader(t.Context(), bytes.NewReader([]byte("XXXX"))); !errors.Is(err, errBadMagic) {
 		t.Fatalf("magic: %v", err)
 	}
-	if _, err := NewReader(bytes.NewReader([]byte("XTL"))); err == nil {
+	if _, err := NewReader(t.Context(), bytes.NewReader([]byte("XTL"))); err == nil {
 		t.Fatal("want short magic")
 	}
 }
@@ -32,7 +32,7 @@ func TestNewReaderNilShortBadMagic(t *testing.T) {
 func TestNewReaderTailOnly(t *testing.T) {
 	t.Parallel()
 	plain := []byte("hello xt3u")
-	r, err := NewReader(bytes.NewReader(tailSolid(plain)))
+	r, err := NewReader(t.Context(), bytes.NewReader(tailSolid(plain)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestNewReaderLZ4HC(t *testing.T) {
 		t.Skip("xt3udec.wasm not built")
 	}
 	raw := bytes.Repeat([]byte("Songs of Conquest "), 64)
-	g, err := openGuest()
+	g, err := openGuest(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestNewReaderLZ4HC(t *testing.T) {
 		t.Fatal(err)
 	}
 	opt := int32(1 | (12 << 3))
-	r, err := NewReader(bytes.NewReader(lz4hcSolid(raw, comp, opt)))
+	r, err := NewReader(t.Context(), bytes.NewReader(lz4hcSolid(raw, comp, opt)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,7 @@ func TestParseHeaderSOC(t *testing.T) {
 
 func TestNewReaderCorpusHead(t *testing.T) {
 	src := afterMagic2SREP(t)
-	r, err := NewReader(src)
+	r, err := NewReader(t.Context(), src)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -123,7 +123,7 @@ func afterMagic2SREP(t *testing.T) io.Reader {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { m.Close() })
-	s, err := srep.NewReader(m)
+	s, err := srep.NewReader(t.Context(), m)
 	if err != nil {
 		t.Fatal(err)
 	}

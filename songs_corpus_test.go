@@ -38,13 +38,13 @@ func TestSongsOfConquestPrefHeader(t *testing.T) {
 	require.NoError(t, err)
 	v, err := parseVolume("fg-optional-bonus-content.bin", data)
 	require.NoError(t, err)
-	for _, s := range groupSolids(v.Members) {
+	for s := range groupSolids(v.Members) {
 		if s.pipe.String() != "pref+srep:m3yf+magic2" {
 			continue
 		}
-		r, err := Decode(bytes.NewReader(data[s.off:s.off+int64(s.csz)]), s.pipe[len(s.pipe)-1])
+		r, err := Decode(t.Context(), bytes.NewReader(data[s.off:s.off+int64(s.csz)]), s.pipe[len(s.pipe)-1])
 		require.NoError(t, err)
-		r2, err := Decode(r, s.pipe[len(s.pipe)-2])
+		r2, err := Decode(t.Context(), r, s.pipe[len(s.pipe)-2])
 		require.NoError(t, err)
 		var head [16]byte
 		n, err := io.ReadFull(r2, head[:])
@@ -96,12 +96,12 @@ func TestExtractSongsOfConquestPref(t *testing.T) {
 	require.NoError(t, err)
 	dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
 	found := false
-	for _, s := range groupSolids(v.Members) {
+	for s := range groupSolids(v.Members) {
 		if !strings.Contains(s.pipe.String(), "pref") {
 			continue
 		}
 		found = true
-		require.NoError(t, extractSolid(Extractor{Source: src, Dest: dst}, data, s))
+		require.NoError(t, extractSolid(t.Context(), Extractor{Source: src, Dest: dst}, bytes.NewReader(data), s, nil))
 		for _, m := range s.files {
 			if m.Dir {
 				continue
@@ -124,7 +124,7 @@ func TestExtractSongsOfConquestVolumes(t *testing.T) {
 	for _, name := range []string{"fg-01.bin", "fg-02.bin", "fg-03.bin", "fg-04.bin"} {
 		t.Run(name, func(t *testing.T) {
 			dst := &reconstruction{files: map[string][]byte{}, dirs: map[string]fs.FileMode{}}
-			require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}))
+			require.NoError(t, extractVolume(t.Context(), Extractor{Source: src, Dest: dst}, Volume{Name: name}, nil))
 			data, err := lewpath.New(name).ReadFile(src)
 			require.NoError(t, err)
 			v, err := parseVolume(name, data)

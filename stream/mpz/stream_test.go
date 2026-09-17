@@ -15,7 +15,7 @@ func TestRangeCodedLiterals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewReader(bytes.NewReader(data))
+	r, err := NewReader(t.Context(), bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,7 +25,7 @@ func TestRangeCodedLiterals(t *testing.T) {
 		t.Fatalf("%q %v", got, err)
 	}
 	for n := 16; n < len(data); n++ {
-		r, err := NewReader(bytes.NewReader(data[:n]))
+		r, err := NewReader(t.Context(), bytes.NewReader(data[:n]))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -39,7 +39,7 @@ func TestRangeCodedLiterals(t *testing.T) {
 
 func TestComplementedLiterals(t *testing.T) {
 	data := append(frameHead(version5450, 0, 0, 0)[:4], []byte{0, 255, 128, 127}...)
-	r, err := NewReader(bytes.NewReader(data))
+	r, err := NewReader(t.Context(), bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,14 +57,14 @@ func TestComplementedLiterals(t *testing.T) {
 
 func TestOutputBound(t *testing.T) {
 	for _, n := range []uint32{0, maxBlock + 1, ^uint32(0)} {
-		if _, err := NewReader(bytes.NewReader(frameHead(version5451, n, 0, 0))); err == nil {
+		if _, err := NewReader(t.Context(), bytes.NewReader(frameHead(version5451, n, 0, 0))); err == nil {
 			t.Fatalf("accepted size %d", n)
 		}
 	}
 }
 
 func TestZeroLengthReadDoesNotDecode(t *testing.T) {
-	r, err := NewReader(bytes.NewReader(frameHead(version5451, 3, 0, 0)))
+	r, err := NewReader(t.Context(), bytes.NewReader(frameHead(version5451, 3, 0, 0)))
 	if err != nil {
 		t.Fatal(err)
 	}

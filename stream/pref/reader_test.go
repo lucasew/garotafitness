@@ -11,15 +11,15 @@ import (
 
 func TestNewReader(t *testing.T) {
 	t.Parallel()
-	_, err := NewReader(nil)
+	_, err := NewReader(t.Context(), nil)
 	if !errors.Is(err, errNil) {
 		t.Fatalf("nil: %v", err)
 	}
-	_, err = NewReader(bytes.NewReader(nil))
+	_, err = NewReader(t.Context(), bytes.NewReader(nil))
 	if err == nil {
 		t.Fatal("accepted empty")
 	}
-	_, err = NewReader(bytes.NewReader([]byte("ArC\x01xxxx")))
+	_, err = NewReader(t.Context(), bytes.NewReader([]byte("ArC\x01xxxx")))
 	if err == nil {
 		t.Fatal("accepted non-PCF")
 	}
@@ -49,7 +49,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 	plain := testdataPlain(t)
 	pcf := testdataPCF(t)
-	rc, err := NewReader(bytes.NewReader(pcf))
+	rc, err := NewReader(t.Context(), bytes.NewReader(pcf))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestInstantiateGuest(t *testing.T) {
 	if len(guestWASM) < 8 {
 		t.Skip("no wasm")
 	}
-	_, err := NewReader(bytes.NewReader([]byte("PCF\x00\x04\x08\x00")))
+	_, err := NewReader(t.Context(), bytes.NewReader([]byte("PCF\x00\x04\x08\x00")))
 	if err == nil {
 		return
 	}

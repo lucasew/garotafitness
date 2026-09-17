@@ -22,7 +22,7 @@ func Apply(ctx context.Context, old, diff []byte) ([]byte, error) {
 		return nil, fmt.Errorf("x5: input exceeds Guest memory limit")
 	}
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	defer rt.Close(context.Background())
+	defer rt.Close(context.WithoutCancel(ctx))
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		return nil, fmt.Errorf("x5: wasi: %w", err)
 	}

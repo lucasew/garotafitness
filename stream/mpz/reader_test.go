@@ -2,6 +2,7 @@ package mpz
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"hash/crc32"
@@ -44,12 +45,12 @@ func TestNewReader(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			rc, err := NewReader(tt.in)
+			rc, err := NewReader(t.Context(), tt.in)
 			if rc != nil {
-				t.Fatalf("NewReader(%s) reader = %T; want nil", tt.name, rc)
+				t.Fatalf("NewReader(t.Context(), %s) reader = %T; want nil", tt.name, rc)
 			}
 			if !errors.Is(err, tt.want) {
-				t.Fatalf("NewReader(%s) err = %v; want %v", tt.name, err, tt.want)
+				t.Fatalf("NewReader(t.Context(), %s) err = %v; want %v", tt.name, err, tt.want)
 			}
 		})
 	}
@@ -58,7 +59,7 @@ func TestNewReader(t *testing.T) {
 func TestNewReaderTagged(t *testing.T) {
 	t.Parallel()
 	in := frameHead(version5451, 64, 1, 0)
-	rc, err := NewReader(bytes.NewReader(in))
+	rc, err := NewReader(t.Context(), bytes.NewReader(in))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,13 +74,13 @@ func TestFourx4Inner(t *testing.T) {
 	t.Parallel()
 	payload := frameHead(version5451, 8, 1, 0)
 	in := frame4x4(8, payload)
-	inner := func(r io.Reader, name, params string) (io.ReadCloser, error) {
+	inner := func(_ context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
 		if name != "mpz" || params != "" {
 			t.Fatalf("inner %q %q", name, params)
 		}
-		return NewReader(r)
+		return NewReader(t.Context(), r)
 	}
-	rd, err := fourx4.NewReader(bytes.NewReader(in), "b16mb:mpz", inner)
+	rd, err := fourx4.NewReader(t.Context(), bytes.NewReader(in), "b16mb:mpz", inner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,14 +149,14 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	inner := func(r io.Reader, name, params string) (io.ReadCloser, error) {
+	inner := func(_ context.Context, r io.Reader, name, params string) (io.ReadCloser, error) {
 		if name != "mpz" {
 			t.Fatalf("inner %q", name)
 		}
-		return NewReader(r)
+		return NewReader(t.Context(), r)
 	}
 	// One 4x4 member (version + sizes + payload). Full solid is 178MiB.
-	fx, err := fourx4.NewReader(io.LimitReader(f, int64(12+inSize)), "b16mb:mpz", inner)
+	fx, err := fourx4.NewReader(t.Context(), io.LimitReader(f, int64(12+inSize)), "b16mb:mpz", inner)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +168,7 @@ func TestOptionalOSTFirstMP3(t *testing.T) {
 	if !bytes.HasPrefix(got, []byte{0x17, 0x18, 0x35, 0x26}) && !bytes.HasPrefix(got, []byte("SREP")) {
 		t.Fatalf("mpz guest: no srep prefix (%d bytes)", len(got))
 	}
-	sr, err := srep.NewReader(bytes.NewReader(got))
+	sr, err := srep.NewReader(t.Context(), bytes.NewReader(got))
 	if err != nil {
 		t.Fatal(err)
 	}

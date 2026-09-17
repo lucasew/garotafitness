@@ -39,7 +39,7 @@ func TestOptionalVolumesFollowSetupRecords(t *testing.T) {
 				components, err := sourceComponents([]setupdata.Operation{op})
 				require.NoError(t, err)
 				source := fstest.MapFS{checksumName: {Data: []byte("900150983cd24fb0d6963f7d28e17f72 *..\\" + name + "\n")}}
-				errors := []error{verifyChecksums(source, nil, components), testPlan().run(t.Context(), []setupdata.Operation{op})}
+				errors := []error{verifyChecksums(t.Context(), source, nil, components), testPlan().run(t.Context(), []setupdata.Operation{op})}
 				for _, err := range errors {
 					if optional {
 						require.NoError(t, err)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/reconstruct/fgpack"
 	"github.com/lucasew/garotafitness/reconstruct/fsb"
 	"github.com/lucasew/garotafitness/reconstruct/x2"
@@ -51,6 +52,22 @@ func recipeWords(line string) ([]string, error) {
 }
 
 func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth int) error {
+	p.resetStamps()
+	return withSession(ctx, func(ctx context.Context) error {
+		if err := p.recipeLines(ctx, text, cwd, depth); err != nil {
+			return err
+		}
+		if err := p.waitScheduled(); err != nil {
+			return err
+		}
+		for path := range p.lastWrite {
+			p.scheduleHash(ctx, path, nil)
+		}
+		return nil
+	})
+}
+
+func (p *reconstructionPlan) recipeLines(ctx context.Context, text, cwd string, depth int) error {
 	if depth > 32 {
 		return fmt.Errorf("recursive reconstruction recipe")
 	}
@@ -89,7 +106,7 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 				return err
 			}
 			if len(words) > 0 {
-				if err := p.words(ctx, words, cwd, depth+1); err != nil {
+				if err := p.scheduleWords(ctx, words, cwd, depth+1); err != nil {
 					return fmt.Errorf("recipe %q: %w", part, err)
 				}
 			}
@@ -106,6 +123,7 @@ func (p *reconstructionPlan) recipe(ctx context.Context, text, cwd string, depth
 }
 
 func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd string, depth int) error {
+	p.resetStamps()
 	if strings.EqualFold(program, "{cmd}") || strings.EqualFold(lewpath.New(strings.ReplaceAll(program, "\\", "/")).Name(), "cmd.exe") {
 		if len(args) < 3 || !strings.EqualFold(args[:3], "/c ") {
 			return fmt.Errorf("unsupported cmd parameters %q", args)
@@ -116,7 +134,18 @@ func (p *reconstructionPlan) command(ctx context.Context, program, args, cwd str
 	if err != nil {
 		return err
 	}
-	return p.words(ctx, append([]string{program}, words...), cwd, depth+1)
+	return withSession(ctx, func(ctx context.Context) error {
+		if err := p.scheduleWords(ctx, append([]string{program}, words...), cwd, depth+1); err != nil {
+			return err
+		}
+		if err := p.waitScheduled(); err != nil {
+			return err
+		}
+		for path := range p.lastWrite {
+			p.scheduleHash(ctx, path, nil)
+		}
+		return nil
+	})
 }
 
 func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, depth int) error {
@@ -171,6 +200,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 				if err := p.remove(n, true); err != nil {
 					return err
 				}
+				slog.Info("removed tree", "path", n)
 				continue
 			}
 			matches, err := p.matches(n, false)
@@ -181,6 +211,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 				if err := p.remove(m, false); err != nil {
 					return err
 				}
+				slog.Info("deleted", "path", m)
 			}
 		}
 		return nil
@@ -213,7 +244,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err := p.remove(source, false); err != nil {
 			return err
 		}
-		return p.put(dest, b)
+		if err := p.put(dest, b); err != nil {
+			return err
+		}
+		slog.Info("moved", "from", source, "to", dest, "size", len(b))
+		return nil
 	case "copy":
 		a = stripFlags(a)
 		if len(a) < 1 || len(a) > 2 {
@@ -289,6 +324,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err := fsb.Remux(ctx, &out, bytes.NewReader(b)); err != nil {
 			return err
 		}
+		slog.Info("fsb", "src", a[0], "dst", a[1], "in", len(b), "out", out.Len())
 		return put(a[1], out.Bytes())
 	case "x2.exe":
 		if len(a) != 2 {
@@ -306,6 +342,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
+		dst, err := resolve(a[0])
+		if err != nil {
+			return err
+		}
+		slog.Info("x2", "file", dst, "patch", a[1], "in", len(old), "out", len(out))
 		return put(a[0], out)
 	case "x5.exe", "hpatchz.exe":
 		if len(a) > 0 && strings.HasPrefix(a[0], "-s-") {
@@ -326,6 +367,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
+		dst, err := resolve(a[2])
+		if err != nil {
+			return err
+		}
+		slog.Info("x5", "old", a[0], "diff", a[1], "dst", dst, "in", len(old), "out", len(out))
 		return put(a[2], out)
 	case "fgpack.exe":
 		options, source, dest, err := packingOptions(a)
@@ -336,11 +382,19 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
-		slog.Info("reconstruct compressed file", "name", lewpath.New(cwd, dest).String())
+		src, err := resolve(source)
+		if err != nil {
+			return err
+		}
+		dst, err := resolve(dest)
+		if err != nil {
+			return err
+		}
 		out, err := fgpack.EncodeWithOptions(ctx, b, options)
 		if err != nil {
 			return err
 		}
+		slog.Info("fgpack", "src", src, "dst", dst, "in", len(b), "out", len(out))
 		return put(dest, out)
 	case "x.exe", "xdelta.exe", "xdelta3.exe":
 		var source string
@@ -379,6 +433,11 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		if err != nil {
 			return err
 		}
+		dst, err := resolve(files[1])
+		if err != nil {
+			return err
+		}
+		slog.Info("xdelta", "src", source, "diff", files[0], "dst", dst, "in", len(old), "out", len(out))
 		return put(files[1], out)
 	case "x3.exe":
 		if len(a) != 1 {
@@ -393,27 +452,34 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			return err
 		}
 		slog.Info("apply update", "patch", a[0], "files", len(records))
-		for _, r := range records {
-			old, err := read(r.Source)
-			if err != nil {
-				return err
-			}
-			out, err := r.Apply(ctx, old)
-			if err != nil {
-				return err
-			}
-			source, err := resolve(r.Source)
-			if err != nil {
-				return err
-			}
-			if err := p.remove(source, false); err != nil {
-				return err
-			}
-			if err := put(r.Target, out); err != nil {
-				return err
-			}
-		}
-		return nil
+		return taskgroup.Each[x3.Record]{
+			Name:     "x3",
+			PoolKind: taskgroup.CPU,
+			Items:    records,
+			TaskName: func(_ int, r x3.Record) string { return r.Target },
+			Fn: func(ctx context.Context, _ *taskgroup.Status, r x3.Record) error {
+				old, err := read(r.Source)
+				if err != nil {
+					return err
+				}
+				out, err := r.Apply(ctx, old)
+				if err != nil {
+					return err
+				}
+				source, err := resolve(r.Source)
+				if err != nil {
+					return err
+				}
+				if err := p.remove(source, false); err != nil {
+					return err
+				}
+				if err := put(r.Target, out); err != nil {
+					return err
+				}
+				slog.Info("x3", "src", r.Source, "dst", r.Target, "in", len(old), "out", len(out))
+				return nil
+			},
+		}.Run(ctx)
 	}
 	if strings.HasSuffix(name, ".bat") || strings.HasSuffix(name, ".cmd") {
 		if len(a) != 0 {

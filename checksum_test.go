@@ -3,6 +3,7 @@ package garotafitness
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -35,7 +36,7 @@ func TestVerifyChecksumsSkipMissingOptional(t *testing.T) {
 	}
 	vols, err := listVolumes(src)
 	require.NoError(t, err)
-	require.NoError(t, verifyChecksums(src, vols, nil))
+	require.NoError(t, verifyChecksums(t.Context(), src, vols, nil))
 }
 
 func TestVerifyChecksumsMismatch(t *testing.T) {
@@ -46,5 +47,22 @@ func TestVerifyChecksumsMismatch(t *testing.T) {
 	}
 	vols, err := listVolumes(src)
 	require.NoError(t, err)
-	require.ErrorContains(t, verifyChecksums(src, vols, nil), "mismatch")
+	require.ErrorContains(t, verifyChecksums(t.Context(), src, vols, nil), "mismatch")
+}
+
+func TestVerifyChecksumsManyFiles(t *testing.T) {
+	t.Parallel()
+	src := fstest.MapFS{}
+	var lines []string
+	for i := 1; i <= 8; i++ {
+		name := fmt.Sprintf("fg-%02d.bin", i)
+		body := []byte(fmt.Sprintf("%s%d", arcMagic, i))
+		sum := md5.Sum(body)
+		src[name] = &fstest.MapFile{Data: body}
+		lines = append(lines, hex.EncodeToString(sum[:])+" *..\\"+name)
+	}
+	src[checksumName] = &fstest.MapFile{Data: []byte(strings.Join(lines, "\n") + "\n")}
+	vols, err := listVolumes(src)
+	require.NoError(t, err)
+	require.NoError(t, verifyChecksums(t.Context(), src, vols, nil))
 }

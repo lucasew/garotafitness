@@ -8,6 +8,7 @@ package xt3u
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ const (
 )
 
 // NewReader wraps an official XTL0 stream as compress/gzip does.
-func NewReader(r io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
@@ -54,7 +55,7 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 	if h.Depth < 0 || h.Depth > 16 {
 		return nil, fmt.Errorf("xt3u: depth %d", h.Depth)
 	}
-	rd := &reader{src: br, hdr: h, st: stNeedCount}
+	rd := &reader{ctx: ctx, src: br, hdr: h, st: stNeedCount}
 	if h.StoreDD > -2 {
 		rd.dd = newDedup(h.Dups)
 	}
@@ -62,6 +63,7 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 }
 
 type reader struct {
+	ctx       context.Context
 	src       *bufio.Reader
 	hdr       Header
 	dd        *dedup
@@ -355,7 +357,7 @@ func (r *reader) ensureGuest() error {
 	if r.g != nil {
 		return nil
 	}
-	g, err := openGuest()
+	g, err := openGuest(r.ctx)
 	if err != nil {
 		return err
 	}

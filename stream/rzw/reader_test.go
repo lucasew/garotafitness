@@ -174,7 +174,7 @@ func TestFG05Pipeline(t *testing.T) {
 	var dhead [16]byte
 	dn, derr := io.ReadFull(dis, dhead[:])
 	t.Logf("dispack head n=%d %x err=%v", dn, dhead[:dn], derr)
-	sr, err := srep.NewReader(io.MultiReader(bytes.NewReader(dhead[:dn]), dis))
+	sr, err := srep.NewReader(t.Context(), io.MultiReader(bytes.NewReader(dhead[:dn]), dis))
 	if err != nil {
 		if errors.Is(err, errCodec) {
 			t.Fatalf("rzw kernel: %v", err)

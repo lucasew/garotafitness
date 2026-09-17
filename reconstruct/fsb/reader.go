@@ -21,7 +21,7 @@ func Remux(ctx context.Context, dst io.Writer, src io.Reader) error {
 		return fmt.Errorf("fsb: nil input or output")
 	}
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	defer rt.Close(context.Background())
+	defer rt.Close(context.WithoutCancel(ctx))
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		return fmt.Errorf("fsb: wasi: %w", err)
 	}
@@ -38,11 +38,11 @@ func Remux(ctx context.Context, dst io.Writer, src io.Reader) error {
 }
 
 // NewReader returns FSB5 bytes. Close cancels the remux and releases its Guest.
-func NewReader(src io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
 	if src == nil {
 		return nil, fmt.Errorf("fsb: nil reader")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(ctx)
 	r, w := io.Pipe()
 	done := make(chan struct{})
 	go func() {

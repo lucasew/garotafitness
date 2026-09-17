@@ -2,14 +2,18 @@ package garotafitness
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
 	"io/fs"
+	"iter"
 	"log/slog"
+	"slices"
 
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/setupdata"
 )
 
@@ -29,6 +33,13 @@ func (e Extractor) Extract(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	return withSession(ctx, e.extract)
+}
+
+func (e Extractor) extract(ctx context.Context) error {
+	context.AfterFunc(ctx, func() {
+		slog.Warn("extract context done", "err", ctx.Err(), "cause", context.Cause(ctx))
+	})
 	setup, setupErr := readSetup(e.Source)
 	if err := setupErr; err != nil {
 		return fmt.Errorf("setup.exe: %w", err)
@@ -52,22 +63,43 @@ func (e Extractor) Extract(ctx context.Context) error {
 			vols[i].Optional = flag
 		}
 	}
-	if err := verifyChecksums(e.Source, vols, optional); err != nil {
+	if err := scheduleChecksums(ctx, e.Source, vols, optional); err != nil {
 		return err
 	}
 	if setup.InstalledMD5 != "" || len(setup.Operations) != 0 {
 		slog.Info("reconstruct from setup metadata")
 		return e.extractReconstructed(ctx, vols, setup)
 	}
-	for _, v := range vols {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := extractVolume(ctx, e, v); err != nil {
-			return err
-		}
+	return extractVolumes(ctx, e, vols)
+}
+
+func fileSize(src fs.FS, name string) int64 {
+	fi, err := fs.Stat(src, name)
+	if err != nil {
+		return 0
 	}
-	return nil
+	return fi.Size()
+}
+
+func sortVolumesBySize(src fs.FS, vols []Volume) {
+	slices.SortFunc(vols, func(a, b Volume) int {
+		return cmp.Compare(fileSize(src, b.Name), fileSize(src, a.Name))
+	})
+}
+
+func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
+	sortVolumesBySize(e.Source, vols)
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[Volume]{
+			Name:     "volumes",
+			PoolKind: taskgroup.Control,
+			Items:    vols,
+			TaskName: func(_ int, v Volume) string { return v.Name },
+			Fn: func(ctx context.Context, s *taskgroup.Status, v Volume) error {
+				return extractVolume(ctx, e, v, s)
+			},
+		}.Run(ctx)
+	})
 }
 
 func scanSetup(src fs.FS) ([]string, error) {
@@ -87,7 +119,50 @@ func readSetup(src fs.FS) (setupdata.Info, error) {
 	return setupdata.Scan(f)
 }
 
-func extractVolume(ctx context.Context, e Extractor, v Volume) error {
+type byteProgress struct {
+	s           *taskgroup.Status
+	done, total int64
+}
+
+func (p *byteProgress) add(n int64) {
+	if p == nil || p.s == nil || p.total <= 0 {
+		return
+	}
+	p.done += n
+	p.s.Progress(p.done, p.total)
+}
+
+func (p *byteProgress) member(name string) {
+	if p == nil || p.s == nil {
+		return
+	}
+	p.s.Update(name)
+}
+
+type countReader struct {
+	r io.Reader
+	p *byteProgress
+}
+
+func (c countReader) Read(b []byte) (int, error) {
+	n, err := c.r.Read(b)
+	c.p.add(int64(n))
+	return n, err
+}
+
+func asReaderAt(f fs.File) (io.ReaderAt, int64, bool) {
+	ra, ok := f.(io.ReaderAt)
+	if !ok {
+		return nil, 0, false
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return nil, 0, false
+	}
+	return ra, st.Size(), true
+}
+
+func extractVolume(ctx context.Context, e Extractor, v Volume, st *taskgroup.Status) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -96,36 +171,92 @@ func extractVolume(ctx context.Context, e Extractor, v Volume) error {
 		return fmt.Errorf("open %s: %w", v.Name, err)
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
-	if err != nil {
-		return fmt.Errorf("read %s: %w", v.Name, err)
+	ra, size, ok := asReaderAt(f)
+	if !ok {
+		data, err := io.ReadAll(ctxReader{ctx, f})
+		if err != nil {
+			return fmt.Errorf("read %s: %w", v.Name, err)
+		}
+		ra = bytes.NewReader(data)
+		size = int64(len(data))
 	}
-	slog.Info("read volume", "name", v.Name, "bytes", len(data))
-	return extractVolumeData(ctx, e, v.Name, data)
+	slog.Info("open volume", "name", v.Name, "bytes", size)
+	return extractVolumeAt(ctx, e, v.Name, ra, size, st)
 }
 
-func extractVolumeData(ctx context.Context, e Extractor, name string, data []byte) error {
-	parsed, err := parseVolume(name, data)
+func extractVolumeData(ctx context.Context, e Extractor, name string, data []byte, st *taskgroup.Status) error {
+	return extractVolumeAt(ctx, e, name, bytes.NewReader(data), int64(len(data)), st)
+}
+
+func extractVolumeAt(ctx context.Context, e Extractor, name string, ra io.ReaderAt, size int64, st *taskgroup.Status) error {
+	parsed, err := parseVolumeAt(name, ra, size)
 	if err != nil {
 		return err
 	}
+	var total int64
 	for _, m := range parsed.Members {
-		if !m.Dir {
+		if m.Dir {
+			if err := e.Dest.MkdirAll(m.Path, 0o755); err != nil {
+				return err
+			}
 			continue
 		}
-		if err := e.Dest.MkdirAll(m.Path, 0o755); err != nil {
-			return err
+		total += int64(m.Size)
+	}
+	err = extractSolids(ctx, e, ra, groupSolids(parsed.Members))
+	if err != nil {
+		return err
+	}
+	var files int
+	for _, m := range parsed.Members {
+		if !m.Dir {
+			files++
 		}
 	}
-	for _, s := range groupSolids(parsed.Members) {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if err := extractSolid(e, data, s); err != nil {
-			return err
-		}
-	}
+	slog.Info("extracted volume", "name", name, "compressed", size, "uncompressed", total, "files", files)
 	return nil
+}
+
+func extractSolids(ctx context.Context, e Extractor, ra io.ReaderAt, solids iter.Seq[solid]) error {
+	var list []solid
+	for s := range solids {
+		list = append(list, s)
+	}
+	if len(list) == 0 {
+		return nil
+	}
+	slices.SortFunc(list, func(a, b solid) int {
+		if c := cmp.Compare(b.csz, a.csz); c != 0 {
+			return c
+		}
+		var as, bs uint64
+		for _, m := range a.files {
+			as += m.Size
+		}
+		for _, m := range b.files {
+			bs += m.Size
+		}
+		return cmp.Compare(bs, as)
+	})
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[solid]{
+			Name:     "solids",
+			PoolKind: taskgroup.CPU,
+			Items:    list,
+			TaskName: func(_ int, s solid) string { return s.pipe.String() },
+			Fn: func(ctx context.Context, st *taskgroup.Status, s solid) error {
+				var total int64
+				for _, m := range s.files {
+					total += int64(m.Size)
+				}
+				prog := &byteProgress{s: st, total: total}
+				if total > 0 {
+					st.Progress(0, total)
+				}
+				return extractSolid(ctx, e, ra, s, prog)
+			},
+		}.Run(ctx)
+	})
 }
 
 type solid struct {
@@ -135,35 +266,37 @@ type solid struct {
 	files []Member
 }
 
-func groupSolids(ms []Member) []solid {
-	type key struct {
-		pipe string
-		off  int64
-		csz  uint64
-	}
-	order := make([]key, 0)
-	by := make(map[key]*solid)
-	for _, m := range ms {
-		if m.Dir {
-			continue
+func groupSolids(ms []Member) iter.Seq[solid] {
+	return func(yield func(solid) bool) {
+		type key struct {
+			pipe string
+			off  int64
+			csz  uint64
 		}
-		k := key{m.Pipeline.String(), m.Offset, m.CompSize}
-		s, ok := by[k]
-		if !ok {
-			s = &solid{pipe: m.Pipeline, off: m.Offset, csz: m.CompSize}
-			by[k] = s
-			order = append(order, k)
+		order := make([]key, 0)
+		by := make(map[key]*solid)
+		for _, m := range ms {
+			if m.Dir {
+				continue
+			}
+			k := key{m.Pipeline.String(), m.Offset, m.CompSize}
+			s, ok := by[k]
+			if !ok {
+				s = &solid{pipe: m.Pipeline, off: m.Offset, csz: m.CompSize}
+				by[k] = s
+				order = append(order, k)
+			}
+			s.files = append(s.files, m)
 		}
-		s.files = append(s.files, m)
+		for _, k := range order {
+			if !yield(*by[k]) {
+				return
+			}
+		}
 	}
-	out := make([]solid, 0, len(order))
-	for _, k := range order {
-		out = append(out, *by[k])
-	}
-	return out
 }
 
-func extractSolid(e Extractor, data []byte, s solid) error {
+func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, prog *byteProgress) error {
 	if len(s.files) == 0 {
 		return nil
 	}
@@ -171,12 +304,11 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 		return unknownEncoderError(Atom{})
 	}
 	slog.Info("decode solid", "pipeline", s.pipe.String(), "offset", s.off, "compressed", s.csz, "members", len(s.files))
-	end := s.off + int64(s.csz)
-	if s.off < 0 || end > int64(len(data)) {
+	if s.off < 0 {
 		return fmt.Errorf("solid span")
 	}
 	var (
-		src     io.Reader = bytes.NewReader(data[s.off:end])
+		src     io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
 		closers []io.Closer
 	)
 	defer func() {
@@ -185,17 +317,31 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 		}
 	}()
 	for i := len(s.pipe) - 1; i >= 0; i-- {
-		r, err := Decode(src, s.pipe[i])
+		r, err := Decode(ctx, src, s.pipe[i])
 		if err != nil {
-			return err
+			return fmt.Errorf("open %s in pipeline %s (solid offset %d compressed %d): %w",
+				s.pipe[i], s.pipe.String(), s.off, s.csz, err)
 		}
 		closers = append(closers, r)
 		src = r
 	}
+	if prog != nil && prog.s != nil {
+		prog.s.Update(s.pipe.String())
+	}
 	for _, m := range s.files {
-		if err := writeMember(e.Dest, m, io.LimitReader(src, int64(m.Size))); err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
+		prog.member(m.Path)
+		in := io.Reader(io.LimitReader(src, int64(m.Size)))
+		if prog != nil {
+			in = countReader{r: in, p: prog}
+		}
+		if err := writeMember(ctx, e.Dest, m, in); err != nil {
+			return fmt.Errorf("extract %s pipeline %s (solid offset %d compressed %d): %w",
+				m.Path, s.pipe.String(), s.off, s.csz, err)
+		}
+		slog.Info("extracted", "path", m.Path, "size", m.Size, "pipeline", s.pipe.String())
 	}
 	var extra [1]byte
 	if _, err := io.ReadFull(src, extra[:]); err != io.EOF {
@@ -204,10 +350,15 @@ func extractSolid(e Extractor, data []byte, s solid) error {
 		}
 		return fmt.Errorf("solid contains data after its final member")
 	}
+	var uncompressed uint64
+	for _, m := range s.files {
+		uncompressed += m.Size
+	}
+	slog.Info("extracted solid", "pipeline", s.pipe.String(), "members", len(s.files), "compressed", s.csz, "uncompressed", uncompressed)
 	return nil
 }
 
-func writeMember(dst Dest, m Member, r io.Reader) error {
+func writeMember(ctx context.Context, dst Dest, m Member, r io.Reader) error {
 	w, err := dst.Create(m.Path)
 	if err != nil {
 		return err
@@ -217,10 +368,10 @@ func writeMember(dst Dest, m Member, r io.Reader) error {
 		table = crc32.IEEETable
 	}
 	h := crc32.New(table)
-	n, err := io.Copy(w, io.TeeReader(r, h))
+	n, err := copyCtx(ctx, w, io.TeeReader(r, h))
 	if err != nil {
 		w.Close()
-		return fmt.Errorf("write %s: %w", m.Path, err)
+		return fmt.Errorf("decode %s: %w", m.Path, err)
 	}
 	if err := w.Close(); err != nil {
 		return err

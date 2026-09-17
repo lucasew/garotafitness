@@ -22,7 +22,7 @@ func Bytes(ctx context.Context, code []byte, name string, capacity int, inputs .
 		return nil, fmt.Errorf("%s: Guest memory limit", name)
 	}
 	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	defer rt.Close(context.Background())
+	defer rt.Close(context.WithoutCancel(ctx))
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, rt); err != nil {
 		return nil, err
 	}

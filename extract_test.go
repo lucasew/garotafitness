@@ -1,7 +1,11 @@
 package garotafitness
 
 import (
+	"bytes"
+	"context"
+	"fmt"
 	"hash/crc32"
+	"slices"
 	"testing"
 	"testing/fstest"
 
@@ -56,7 +60,7 @@ func TestExtractStoringSolid(t *testing.T) {
 			{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")},
 		},
 	}
-	require.NoError(t, extractSolid(Extractor{Dest: d}, data, s))
+	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), s, nil))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -79,7 +83,7 @@ func TestExtractStackedStoring(t *testing.T) {
 			{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing+storing")},
 		},
 	}
-	require.NoError(t, extractSolid(Extractor{Dest: d}, data, s))
+	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), s, nil))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -99,7 +103,59 @@ func TestExtractCRCMismatch(t *testing.T) {
 			{Path: "a.txt", Size: 5, CRC: crc32.ChecksumIEEE(data) ^ 1, Pipeline: ParsePipeline("storing")},
 		},
 	}
-	require.ErrorContains(t, extractSolid(Extractor{Dest: d}, data, s), "crc")
+	require.ErrorContains(t, extractSolid(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), s, nil), "crc")
+}
+
+func TestExtractIndependentSolids(t *testing.T) {
+	t.Parallel()
+	d, err := OpenDirDest(t.TempDir())
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, d)
+	data := []byte("helloworld")
+	solids := []solid{
+		{pipe: ParsePipeline("storing"), off: 0, csz: 5, files: []Member{{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
+		{pipe: ParsePipeline("storing"), off: 5, csz: 5, files: []Member{{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
+	}
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), slices.Values(solids)))
+	got, err := lewpath.New("a.txt").ReadFile(d)
+	require.NoError(t, err)
+	require.Equal(t, "hello", string(got))
+	got, err = lewpath.New("b.txt").ReadFile(d)
+	require.NoError(t, err)
+	require.Equal(t, "world", string(got))
+}
+
+func TestExtractIndependentSolidsStaging(t *testing.T) {
+	t.Parallel()
+	s := newStaging()
+	data := make([]byte, 0, 16*5)
+	solids := make([]solid, 16)
+	want := map[string][]byte{}
+	for i := range solids {
+		chunk := []byte(fmt.Sprintf("file%02d", i))[:5]
+		data = append(data, chunk...)
+		name := fmt.Sprintf("f%02d.txt", i)
+		solids[i] = solid{
+			pipe:  ParsePipeline("storing"),
+			off:   int64(i * 5),
+			csz:   5,
+			files: []Member{{Path: name, Size: 5, Pipeline: ParsePipeline("storing")}},
+		}
+		want[name] = append([]byte(nil), chunk...)
+	}
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, bytes.NewReader(data), slices.Values(solids)))
+	require.Equal(t, want, s.files)
+}
+
+func TestWriteMemberCanceled(t *testing.T) {
+	t.Parallel()
+	d, err := OpenDirDest(t.TempDir())
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, d)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = writeMember(ctx, d, Member{Path: "a.txt", Size: 5}, bytes.NewReader([]byte("hello")))
+	require.ErrorIs(t, err, context.Canceled)
 }
 
 func TestExtractUnknownEncoder(t *testing.T) {

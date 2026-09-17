@@ -69,7 +69,12 @@ func decodeFrames(frames [][]byte, limit int) ([]byte, error) {
 	for !d.r.finished() {
 		before := d.pos
 		if !d.decodeByte() || d.pos <= before {
-			return nil, fmt.Errorf("rzw: LZ at %d: %s", before, d.why)
+			why := d.why
+			if why == "" {
+				why = "no progress"
+			}
+			return nil, fmt.Errorf("rzw: decode stuck at output %d/%d (%s; frames_left=%d rans_ok=%v)",
+				before, limit, why, len(d.r.frames), d.r.ok())
 		}
 	}
 	return d.out, nil

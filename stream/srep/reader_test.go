@@ -18,13 +18,13 @@ var futureLZHead = []byte{
 
 func TestNewReader(t *testing.T) {
 	t.Parallel()
-	if _, err := NewReader(nil); err == nil {
+	if _, err := NewReader(t.Context(), nil); err == nil {
 		t.Fatal("want nil reader error")
 	}
-	if _, err := NewReader(bytes.NewReader([]byte("ArC\x01"))); err == nil {
+	if _, err := NewReader(t.Context(), bytes.NewReader([]byte("ArC\x01"))); err == nil {
 		t.Fatal("want header error")
 	}
-	r, err := NewReader(bytes.NewReader(futureLZHead))
+	r, err := NewReader(t.Context(), bytes.NewReader(futureLZHead))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestNewReader(t *testing.T) {
 func TestNewReaderLiterals(t *testing.T) {
 	t.Parallel()
 	plain := []byte("hello")
-	r, err := NewReader(bytes.NewReader(literalSolid(plain)))
+	r, err := NewReader(t.Context(), bytes.NewReader(literalSolid(plain)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestNewReaderCorpus(t *testing.T) {
 	if _, err := f.Seek(0x1F, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	r, err := NewReader(f)
+	r, err := NewReader(t.Context(), f)
 	if err != nil {
 		t.Fatal(err)
 	}

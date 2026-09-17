@@ -101,7 +101,7 @@ func TestNewReaderCorpus(t *testing.T) {
 	if _, err := f.Seek(fg01SolidOff, io.SeekStart); err != nil {
 		t.Fatal(err)
 	}
-	sr, err := srep.NewReader(f)
+	sr, err := srep.NewReader(t.Context(), f)
 	if err != nil {
 		t.Fatal(err)
 	}

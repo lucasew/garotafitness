@@ -24,4 +24,8 @@ func TestParseExtract(t *testing.T) {
 	require.NotNil(t, app.Args.Extract)
 	require.Equal(t, src, app.Args.Extract.Source.Value())
 	require.Equal(t, dst, app.Args.Extract.Dest.Value())
+
+	app, err = cmd.Parse[cmd.App[root]]("--cpu", "2", "extract", src, dst)
+	require.NoError(t, err)
+	require.Equal(t, 2, app.Args.CPU.Value())
 }

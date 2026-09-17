@@ -1,7 +1,6 @@
 package srep
 
 import (
-	"bytes"
 	"context"
 	_ "embed"
 	"encoding/binary"
@@ -11,15 +10,19 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/lucasew/garotafitness/internal/wasmrun"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
-	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 )
 
 //go:embed srepdec.wasm
 var guestWASM []byte
 
-const maxBlock = 8 << 20
+const (
+	maxBlock = 8 << 20
+	minClass = 64
+	numClass = 18 // 64 … 8MiB
+)
 
 var (
 	errNil      = errors.New("srep: nil reader")
@@ -30,37 +33,70 @@ var (
 	instID      atomic.Uint64
 )
 
-type engine struct {
-	rt       wazero.Runtime
-	compiled wazero.CompiledModule
+var (
+	compileCache = sync.OnceValue(wazero.NewCompilationCache)
+	classPools   [numClass]sync.Pool
+)
+
+func init() {
+	for i := range classPools {
+		size := minClass << i
+		classPools[i].New = func() any {
+			b := make([]byte, size)
+			return &b
+		}
+	}
 }
 
-var loadEngine = sync.OnceValues(func() (*engine, error) {
-	ctx := context.Background()
-	rt := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().WithCloseOnContextDone(true))
-	if _, err := instantiateEnv(ctx, rt); err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("srep: env: %w", err)
+func classIndex(n int) int {
+	if n <= minClass {
+		return 0
 	}
-	wasi_snapshot_preview1.MustInstantiate(ctx, rt)
-	compiled, err := rt.CompileModule(ctx, guestWASM)
-	if err != nil {
-		rt.Close(ctx)
-		return nil, fmt.Errorf("srep: compile guest: %w", err)
+	v := n - 1
+	v |= v >> 1
+	v |= v >> 2
+	v |= v >> 4
+	v |= v >> 8
+	v |= v >> 16
+	// v+1 is next power of two; 64 is 2^6
+	pow := v + 1
+	i := 0
+	for p := minClass; p < pow; p <<= 1 {
+		i++
 	}
-	return &engine{rt: rt, compiled: compiled}, nil
-})
+	return i
+}
 
-func instantiateEnv(ctx context.Context, rt wazero.Runtime) (api.Closer, error) {
-	return rt.NewHostModuleBuilder("env").
-		NewFunctionBuilder().WithFunc(func(uint32) {}).Export("emscripten_notify_memory_growth").
-		NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat").
-		NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir").
-		Instantiate(ctx)
+func getBuf(n int) []byte {
+	if n == 0 {
+		return nil
+	}
+	if n > maxBlock {
+		return make([]byte, n)
+	}
+	bp := classPools[classIndex(n)].Get().(*[]byte)
+	return (*bp)[:n]
+}
+
+func putBuf(b []byte) {
+	c := cap(b)
+	if c < minClass || c > maxBlock || c&(c-1) != 0 {
+		return
+	}
+	i := classIndex(c)
+	b = b[:c]
+	classPools[i].Put(&b)
+}
+
+func srepHost(ctx context.Context, rt wazero.Runtime) error {
+	return wasmrun.Emscripten(func(b wazero.HostModuleBuilder) {
+		b.NewFunctionBuilder().WithFunc(func(int32, int32, int32) int32 { return 0 }).Export("__syscall_unlinkat")
+		b.NewFunctionBuilder().WithFunc(func(int32) int32 { return 0 }).Export("__syscall_rmdir")
+	})(ctx, rt)
 }
 
 // NewReader wraps an official SREP v3 stream as compress/gzip does.
-func NewReader(r io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil
 	}
@@ -76,24 +112,18 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 			return nil, fmt.Errorf("srep: seed: %w", err)
 		}
 	}
-	eng, err := loadEngine()
+	inst, err := wasmrun.Open(ctx, compileCache(), guestWASM, "srep", srepHost, wazero.NewModuleConfig().
+		WithName(fmt.Sprintf("srep-%d", instID.Add(1))))
 	if err != nil {
 		return nil, err
 	}
-	ctx := context.Background()
-	mod, err := eng.rt.InstantiateModule(ctx, eng.compiled, wazero.NewModuleConfig().
-		WithName(fmt.Sprintf("srep-%d", instID.Add(1))).
-		WithStartFunctions("_initialize").
-		WithStdout(io.Discard).
-		WithStderr(io.Discard))
-	if err != nil {
-		return nil, fmt.Errorf("srep: instantiate: %w", err)
-	}
+	mod := inst.Mod
 	open := mod.ExportedFunction("srep_open")
 	rd := &reader{
 		src:    r,
 		hdr:    h,
 		ctx:    ctx,
+		inst:   inst,
 		mod:    mod,
 		mem:    mod.Memory(),
 		block:  mod.ExportedFunction("srep_block"),
@@ -102,11 +132,11 @@ func NewReader(r io.Reader) (io.ReadCloser, error) {
 		free:   mod.ExportedFunction("free"),
 	}
 	if rd.mem == nil || open == nil || rd.block == nil || rd.cls == nil || rd.malloc == nil || rd.free == nil {
-		mod.Close(ctx)
+		inst.Close(ctx)
 		return nil, errGuest
 	}
 	if _, err := open.Call(ctx, uint64(h.BaseLen)); err != nil {
-		mod.Close(ctx)
+		inst.Close(ctx)
 		return nil, fmt.Errorf("srep: open: %w", err)
 	}
 	return rd, nil
@@ -116,6 +146,7 @@ type reader struct {
 	src    io.Reader
 	hdr    Header
 	ctx    context.Context
+	inst   *wasmrun.Instance
 	mod    api.Module
 	mem    api.Memory
 	block  api.Function
@@ -146,6 +177,7 @@ func (r *reader) Read(p []byte) (int, error) {
 			r.err = err
 			return 0, err
 		}
+		putBuf(r.buf)
 		r.buf = block
 		r.off = 0
 	}
@@ -155,36 +187,41 @@ func (r *reader) Read(p []byte) (int, error) {
 }
 
 func (r *reader) Close() error {
-	if r.mod == nil {
+	if r.inst == nil {
 		return nil
 	}
 	if r.cls != nil {
 		_, _ = r.cls.Call(r.ctx)
 	}
-	err := r.mod.Close(r.ctx)
+	err := r.inst.Close(r.ctx)
 	r.mod = nil
 	r.err = errClosed
+	putBuf(r.buf)
 	r.buf = nil
 	return err
 }
 
 func (r *reader) next() ([]byte, error) {
 	hdrSize := 12 + r.hdr.hashLen()
-	hdr := make([]byte, hdrSize)
+	hdr := getBuf(hdrSize)
 	n, err := io.ReadFull(r.src, hdr)
 	if n == 0 && (err == io.EOF || errors.Is(err, io.ErrUnexpectedEOF)) {
+		putBuf(hdr)
 		return nil, io.EOF
 	}
 	if err != nil {
+		putBuf(hdr)
 		return nil, fmt.Errorf("srep: block header: %w", err)
 	}
 	dataSize := binary.LittleEndian.Uint32(hdr[0:4])
 	origSize := binary.LittleEndian.Uint32(hdr[4:8])
 	statSize := binary.LittleEndian.Uint32(hdr[8:12])
 	if dataSize == 0 && origSize == 0 {
+		putBuf(hdr)
 		return nil, io.EOF
 	}
 	if origSize > maxBlock || dataSize > maxBlock || statSize > maxBlock {
+		putBuf(hdr)
 		// fg-01: last literal block is followed by a FreeArc trailer
 		// that is not an SREP header. After a successful stream, stop.
 		if r.start > 0 {
@@ -192,19 +229,25 @@ func (r *reader) next() ([]byte, error) {
 		}
 		return nil, errTooLarge
 	}
-	stat := make([]byte, statSize)
+	putBuf(hdr)
+	stat := getBuf(int(statSize))
 	if statSize > 0 {
 		if _, err := io.ReadFull(r.src, stat); err != nil {
+			putBuf(stat)
 			return nil, fmt.Errorf("srep: stat: %w", err)
 		}
 	}
-	lits := make([]byte, dataSize)
+	lits := getBuf(int(dataSize))
 	if dataSize > 0 {
 		if _, err := io.ReadFull(r.src, lits); err != nil {
+			putBuf(stat)
+			putBuf(lits)
 			return nil, fmt.Errorf("srep: lits: %w", err)
 		}
 	}
 	out, err := r.decode(stat, lits, origSize)
+	putBuf(stat)
+	putBuf(lits)
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +277,9 @@ func (r *reader) decode(stat, lits []byte, orig uint32) ([]byte, error) {
 	if len(lits) > 0 && !r.mem.Write(litPtr, lits) {
 		return nil, errGuest
 	}
+	if err := r.ctx.Err(); err != nil {
+		return nil, err
+	}
 	res, err := r.block.Call(r.ctx,
 		uint64(statPtr), uint64(len(stat)),
 		uint64(litPtr), uint64(len(lits)),
@@ -245,11 +291,13 @@ func (r *reader) decode(stat, lits []byte, orig uint32) ([]byte, error) {
 	if res[0] != 0 {
 		return nil, errBroken
 	}
-	out, ok := r.mem.Read(outPtr, orig)
+	src, ok := r.mem.Read(outPtr, orig)
 	if !ok {
 		return nil, errGuest
 	}
-	return bytes.Clone(out), nil
+	out := getBuf(int(orig))
+	copy(out, src)
+	return out, nil
 }
 
 func (r *reader) alloc(n uint32) (uint32, error) {
