@@ -452,7 +452,7 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 			return err
 		}
 		slog.Info("apply update", "patch", a[0], "files", len(records))
-		return each(ctx, slices.Values(records), func(ctx context.Context, r x3.Record) error {
+		return eachNamed(ctx, "x3", taskgroup.CPU, slices.Values(records), func(r x3.Record) string { return r.Target }, func(ctx context.Context, r x3.Record) error {
 			old, err := read(r.Source)
 			if err != nil {
 				return err

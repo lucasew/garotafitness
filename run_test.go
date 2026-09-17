@@ -12,7 +12,7 @@ import (
 
 func TestEachEmpty(t *testing.T) {
 	t.Parallel()
-	require.NoError(t, each(t.Context(), slices.Values([]int(nil)), func(context.Context, int) error {
+	require.NoError(t, each(t.Context(), "test", slices.Values([]int(nil)), func(context.Context, int) error {
 		t.Fatal("ran")
 		return nil
 	}))
@@ -21,7 +21,7 @@ func TestEachEmpty(t *testing.T) {
 func TestEachOne(t *testing.T) {
 	t.Parallel()
 	var n atomic.Int32
-	err := each(t.Context(), slices.Values([]int{7}), func(_ context.Context, v int) error {
+	err := each(t.Context(), "test", slices.Values([]int{7}), func(_ context.Context, v int) error {
 		n.Add(int32(v))
 		return nil
 	})
@@ -39,7 +39,7 @@ func TestEachMany(t *testing.T) {
 			}
 		}
 	}
-	require.NoError(t, each(t.Context(), seq, func(context.Context, int) error {
+	require.NoError(t, each(t.Context(), "test", seq, func(context.Context, int) error {
 		n.Add(1)
 		return nil
 	}))
@@ -49,7 +49,7 @@ func TestEachMany(t *testing.T) {
 func TestEachFirstError(t *testing.T) {
 	t.Parallel()
 	boom := errors.New("boom")
-	err := each(t.Context(), slices.Values([]int{1, 2, 3, 4}), func(_ context.Context, v int) error {
+	err := each(t.Context(), "test", slices.Values([]int{1, 2, 3, 4}), func(_ context.Context, v int) error {
 		if v == 1 {
 			return boom
 		}
@@ -62,10 +62,8 @@ func TestEachCanceled(t *testing.T) {
 	t.Parallel()
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	err := each(ctx, slices.Values([]int{1}), func(context.Context, int) error {
+	err := each(ctx, "test", slices.Values([]int{1}), func(context.Context, int) error {
 		return errors.New("should not run")
 	})
 	require.ErrorIs(t, err, context.Canceled)
 }
-
-

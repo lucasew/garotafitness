@@ -51,7 +51,7 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 		}
 		return fmt.Errorf("checksum: missing %s", file)
 	}
-	return eachPool(ctx, taskgroup.IO, func(yield func(job) bool) {
+	return eachPool(ctx, "checksums", taskgroup.IO, func(yield func(job) bool) {
 		for file, sum := range want {
 			v, ok := have[file]
 			if !ok {
@@ -61,7 +61,7 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 				return
 			}
 		}
-	}, func(ctx context.Context, j job) error {
+	}, func(j job) string { return j.file }, func(ctx context.Context, j job) error {
 		got, err := hashFile(ctx, src, j.name)
 		if err != nil {
 			return err
