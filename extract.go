@@ -60,7 +60,7 @@ func (e Extractor) extract(ctx context.Context) error {
 			vols[i].Optional = flag
 		}
 	}
-	if err := verifyChecksums(ctx, e.Source, vols, optional); err != nil {
+	if err := scheduleChecksums(ctx, e.Source, vols, optional); err != nil {
 		return err
 	}
 	if setup.InstalledMD5 != "" || len(setup.Operations) != 0 {

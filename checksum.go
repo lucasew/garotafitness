@@ -17,26 +17,26 @@ import (
 
 const checksumName = "MD5/fitgirl-bins.md5"
 
-func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map[string]bool) error {
+type checksumJob struct {
+	file, sum, name string
+}
+
+func collectChecksums(src fs.FS, vols []Volume, optional map[string]bool) ([]checksumJob, error) {
 	f, err := lewpath.New(checksumName).Open(src)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+			return nil, nil
 		}
-		return fmt.Errorf("checksum: %w", err)
+		return nil, fmt.Errorf("checksum: %w", err)
 	}
 	defer f.Close()
-
 	want, err := parseMD5(f)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	have := make(map[string]Volume, len(vols))
 	for _, v := range vols {
 		have[lewpath.New(v.Name).Name()] = v
-	}
-	type job struct {
-		file, sum, name string
 	}
 	for file := range want {
 		if _, ok := have[file]; ok {
@@ -49,31 +49,63 @@ func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map
 		if flag {
 			continue
 		}
-		return fmt.Errorf("checksum: missing %s", file)
+		return nil, fmt.Errorf("checksum: missing %s", file)
 	}
-	var jobs []job
+	var jobs []checksumJob
 	for file, sum := range want {
 		v, ok := have[file]
 		if !ok {
 			continue
 		}
-		jobs = append(jobs, job{file: file, sum: sum, name: v.Name})
+		jobs = append(jobs, checksumJob{file: file, sum: sum, name: v.Name})
+	}
+	return jobs, nil
+}
+
+func checkVolume(ctx context.Context, src fs.FS, j checksumJob) error {
+	got, err := hashFile(ctx, src, j.name)
+	if err != nil {
+		return err
+	}
+	if got != j.sum {
+		err := fmt.Errorf("checksum: %s mismatch", j.file)
+		if s := taskgroup.FromContext(ctx); s != nil {
+			s.Cancel(err)
+		}
+		return err
+	}
+	return nil
+}
+
+func scheduleChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map[string]bool) error {
+	jobs, err := collectChecksums(src, vols, optional)
+	if err != nil || len(jobs) == 0 {
+		return err
 	}
 	return withSession(ctx, func(ctx context.Context) error {
-		return taskgroup.Each[job]{
+		for _, j := range jobs {
+			taskgroup.Go(ctx, "checksum "+j.file, taskgroup.IO, func(ctx context.Context, s *taskgroup.Status) error {
+				defer s.Unit()()
+				return checkVolume(ctx, src, j)
+			})
+		}
+		return nil
+	})
+}
+
+func verifyChecksums(ctx context.Context, src fs.FS, vols []Volume, optional map[string]bool) error {
+	jobs, err := collectChecksums(src, vols, optional)
+	if err != nil || len(jobs) == 0 {
+		return err
+	}
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[checksumJob]{
 			Name:     "checksums",
 			PoolKind: taskgroup.IO,
 			Items:    jobs,
-			TaskName: func(_ int, j job) string { return j.file },
-			Fn: func(ctx context.Context, _ *taskgroup.Status, j job) error {
-				got, err := hashFile(ctx, src, j.name)
-				if err != nil {
-					return err
-				}
-				if got != j.sum {
-					return fmt.Errorf("checksum: %s mismatch", j.file)
-				}
-				return nil
+			TaskName: func(_ int, j checksumJob) string { return j.file },
+			Fn: func(ctx context.Context, _ *taskgroup.Status, j checksumJob) error {
+				return checkVolume(ctx, src, j)
 			},
 		}.Run(ctx)
 	})
