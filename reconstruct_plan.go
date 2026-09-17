@@ -1,6 +1,7 @@
 package garotafitness
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"io/fs"
@@ -351,6 +352,9 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 		for name := range srcVolumes(ops, p.volumes) {
 			names = append(names, name)
 		}
+		slices.SortFunc(names, func(a, b string) int {
+			return cmp.Compare(fileSize(p.source, b), fileSize(p.source, a))
+		})
 		err := withSession(ctx, func(ctx context.Context) error {
 			return taskgroup.Each[string]{
 				Name:     "volumes",

@@ -2,6 +2,7 @@ package garotafitness
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"io/fs"
 	"iter"
 	"log/slog"
+	"slices"
 
 	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/setupdata"
@@ -68,7 +70,22 @@ func (e Extractor) extract(ctx context.Context) error {
 	return extractVolumes(ctx, e, vols)
 }
 
+func fileSize(src fs.FS, name string) int64 {
+	fi, err := fs.Stat(src, name)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+func sortVolumesBySize(src fs.FS, vols []Volume) {
+	slices.SortFunc(vols, func(a, b Volume) int {
+		return cmp.Compare(fileSize(src, b.Name), fileSize(src, a.Name))
+	})
+}
+
 func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
+	sortVolumesBySize(e.Source, vols)
 	return withSession(ctx, func(ctx context.Context) error {
 		return taskgroup.Each[Volume]{
 			Name:     "volumes",
@@ -184,6 +201,19 @@ func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Se
 	if len(list) == 0 {
 		return nil
 	}
+	slices.SortFunc(list, func(a, b solid) int {
+		if c := cmp.Compare(b.csz, a.csz); c != 0 {
+			return c
+		}
+		var as, bs uint64
+		for _, m := range a.files {
+			as += m.Size
+		}
+		for _, m := range b.files {
+			bs += m.Size
+		}
+		return cmp.Compare(bs, as)
+	})
 	return withSession(ctx, func(ctx context.Context) error {
 		return taskgroup.Each[solid]{
 			Name:     "solids",
