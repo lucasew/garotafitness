@@ -1,0 +1,1 @@
+If a decoder is not working properly find out how it should work by reverse engineering the DLL, not assuming it would work in a specific way. The official installer has the tools in there. Use the conda backend of mise if you need a specific tool.
