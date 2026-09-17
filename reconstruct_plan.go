@@ -345,7 +345,7 @@ func (p *reconstructionPlan) prefetch(ctx context.Context, ops []setupdata.Opera
 		err := withSession(ctx, func(ctx context.Context) error {
 			return taskgroup.Each[string]{
 				Name:     "volumes",
-				PoolKind: taskgroup.CPU,
+				PoolKind: taskgroup.Control,
 				Items:    names,
 				TaskName: func(_ int, name string) string { return name },
 				Fn: func(ctx context.Context, s *taskgroup.Status, name string) error {

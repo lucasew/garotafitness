@@ -72,7 +72,7 @@ func extractVolumes(ctx context.Context, e Extractor, vols []Volume) error {
 	return withSession(ctx, func(ctx context.Context) error {
 		return taskgroup.Each[Volume]{
 			Name:     "volumes",
-			PoolKind: taskgroup.CPU,
+			PoolKind: taskgroup.Control,
 			Items:    vols,
 			TaskName: func(_ int, v Volume) string { return v.Name },
 			Fn: func(ctx context.Context, s *taskgroup.Status, v Volume) error {
@@ -162,11 +162,7 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 		}
 		total += int64(m.Size)
 	}
-	prog := &byteProgress{s: st, total: total}
-	if st != nil && total > 0 {
-		st.Progress(0, total)
-	}
-	err = extractSolids(ctx, e, data, groupSolids(parsed.Members), prog)
+	err = extractSolids(ctx, e, data, groupSolids(parsed.Members))
 	if err != nil {
 		return err
 	}
@@ -180,13 +176,33 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 	return nil
 }
 
-func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid], prog *byteProgress) error {
+func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid]) error {
+	var list []solid
 	for s := range solids {
-		if err := extractSolid(ctx, e, data, s, prog); err != nil {
-			return err
-		}
+		list = append(list, s)
 	}
-	return nil
+	if len(list) == 0 {
+		return nil
+	}
+	return withSession(ctx, func(ctx context.Context) error {
+		return taskgroup.Each[solid]{
+			Name:     "solids",
+			PoolKind: taskgroup.CPU,
+			Items:    list,
+			TaskName: func(_ int, s solid) string { return s.pipe.String() },
+			Fn: func(ctx context.Context, st *taskgroup.Status, s solid) error {
+				var total int64
+				for _, m := range s.files {
+					total += int64(m.Size)
+				}
+				prog := &byteProgress{s: st, total: total}
+				if total > 0 {
+					st.Progress(0, total)
+				}
+				return extractSolid(ctx, e, data, s, prog)
+			},
+		}.Run(ctx)
+	})
 }
 
 type solid struct {

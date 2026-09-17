@@ -116,7 +116,7 @@ func TestExtractIndependentSolids(t *testing.T) {
 		{pipe: ParsePipeline("storing"), off: 0, csz: 5, files: []Member{{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
 		{pipe: ParsePipeline("storing"), off: 5, csz: 5, files: []Member{{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
 	}
-	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: d}, data, slices.Values(solids), nil))
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: d}, data, slices.Values(solids)))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -143,7 +143,7 @@ func TestExtractIndependentSolidsStaging(t *testing.T) {
 		}
 		want[name] = append([]byte(nil), chunk...)
 	}
-	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, data, slices.Values(solids), nil))
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, data, slices.Values(solids)))
 	require.Equal(t, want, s.files)
 }
 
