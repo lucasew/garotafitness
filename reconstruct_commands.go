@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	lewpath "github.com/lewtec/lewkit/x/path"
+	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/reconstruct/fgpack"
 	"github.com/lucasew/garotafitness/reconstruct/fsb"
 	"github.com/lucasew/garotafitness/reconstruct/x2"
