@@ -147,6 +147,18 @@ func (c countReader) Read(b []byte) (int, error) {
 	return n, err
 }
 
+func asReaderAt(f fs.File) (io.ReaderAt, int64, bool) {
+	ra, ok := f.(io.ReaderAt)
+	if !ok {
+		return nil, 0, false
+	}
+	st, err := f.Stat()
+	if err != nil {
+		return nil, 0, false
+	}
+	return ra, st.Size(), true
+}
+
 func extractVolume(ctx context.Context, e Extractor, v Volume, st *taskgroup.Status) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -156,16 +168,25 @@ func extractVolume(ctx context.Context, e Extractor, v Volume, st *taskgroup.Sta
 		return fmt.Errorf("open %s: %w", v.Name, err)
 	}
 	defer f.Close()
-	data, err := io.ReadAll(ctxReader{ctx, f})
-	if err != nil {
-		return fmt.Errorf("read %s: %w", v.Name, err)
+	ra, size, ok := asReaderAt(f)
+	if !ok {
+		data, err := io.ReadAll(ctxReader{ctx, f})
+		if err != nil {
+			return fmt.Errorf("read %s: %w", v.Name, err)
+		}
+		ra = bytes.NewReader(data)
+		size = int64(len(data))
 	}
-	slog.Info("read volume", "name", v.Name, "bytes", len(data))
-	return extractVolumeData(ctx, e, v.Name, data, st)
+	slog.Info("open volume", "name", v.Name, "bytes", size)
+	return extractVolumeAt(ctx, e, v.Name, ra, size, st)
 }
 
 func extractVolumeData(ctx context.Context, e Extractor, name string, data []byte, st *taskgroup.Status) error {
-	parsed, err := parseVolume(name, data)
+	return extractVolumeAt(ctx, e, name, bytes.NewReader(data), int64(len(data)), st)
+}
+
+func extractVolumeAt(ctx context.Context, e Extractor, name string, ra io.ReaderAt, size int64, st *taskgroup.Status) error {
+	parsed, err := parseVolumeAt(name, ra, size)
 	if err != nil {
 		return err
 	}
@@ -179,7 +200,7 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 		}
 		total += int64(m.Size)
 	}
-	err = extractSolids(ctx, e, data, groupSolids(parsed.Members))
+	err = extractSolids(ctx, e, ra, groupSolids(parsed.Members))
 	if err != nil {
 		return err
 	}
@@ -189,11 +210,11 @@ func extractVolumeData(ctx context.Context, e Extractor, name string, data []byt
 			files++
 		}
 	}
-	slog.Info("extracted volume", "name", name, "compressed", len(data), "uncompressed", total, "files", files)
+	slog.Info("extracted volume", "name", name, "compressed", size, "uncompressed", total, "files", files)
 	return nil
 }
 
-func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Seq[solid]) error {
+func extractSolids(ctx context.Context, e Extractor, ra io.ReaderAt, solids iter.Seq[solid]) error {
 	var list []solid
 	for s := range solids {
 		list = append(list, s)
@@ -229,7 +250,7 @@ func extractSolids(ctx context.Context, e Extractor, data []byte, solids iter.Se
 				if total > 0 {
 					st.Progress(0, total)
 				}
-				return extractSolid(ctx, e, data, s, prog)
+				return extractSolid(ctx, e, ra, s, prog)
 			},
 		}.Run(ctx)
 	})
@@ -272,7 +293,7 @@ func groupSolids(ms []Member) iter.Seq[solid] {
 	}
 }
 
-func extractSolid(ctx context.Context, e Extractor, data []byte, s solid, prog *byteProgress) error {
+func extractSolid(ctx context.Context, e Extractor, ra io.ReaderAt, s solid, prog *byteProgress) error {
 	if len(s.files) == 0 {
 		return nil
 	}
@@ -280,12 +301,11 @@ func extractSolid(ctx context.Context, e Extractor, data []byte, s solid, prog *
 		return unknownEncoderError(Atom{})
 	}
 	slog.Info("decode solid", "pipeline", s.pipe.String(), "offset", s.off, "compressed", s.csz, "members", len(s.files))
-	end := s.off + int64(s.csz)
-	if s.off < 0 || end > int64(len(data)) {
+	if s.off < 0 {
 		return fmt.Errorf("solid span")
 	}
 	var (
-		src     io.Reader = bytes.NewReader(data[s.off:end])
+		src     io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
 		closers []io.Closer
 	)
 	defer func() {

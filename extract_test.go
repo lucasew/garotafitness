@@ -60,7 +60,7 @@ func TestExtractStoringSolid(t *testing.T) {
 			{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")},
 		},
 	}
-	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, data, s, nil))
+	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), s, nil))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -83,7 +83,7 @@ func TestExtractStackedStoring(t *testing.T) {
 			{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing+storing")},
 		},
 	}
-	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, data, s, nil))
+	require.NoError(t, extractSolid(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), s, nil))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -103,7 +103,7 @@ func TestExtractCRCMismatch(t *testing.T) {
 			{Path: "a.txt", Size: 5, CRC: crc32.ChecksumIEEE(data) ^ 1, Pipeline: ParsePipeline("storing")},
 		},
 	}
-	require.ErrorContains(t, extractSolid(t.Context(), Extractor{Dest: d}, data, s, nil), "crc")
+	require.ErrorContains(t, extractSolid(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), s, nil), "crc")
 }
 
 func TestExtractIndependentSolids(t *testing.T) {
@@ -116,7 +116,7 @@ func TestExtractIndependentSolids(t *testing.T) {
 		{pipe: ParsePipeline("storing"), off: 0, csz: 5, files: []Member{{Path: "a.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
 		{pipe: ParsePipeline("storing"), off: 5, csz: 5, files: []Member{{Path: "b.txt", Size: 5, Pipeline: ParsePipeline("storing")}}},
 	}
-	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: d}, data, slices.Values(solids)))
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: d}, bytes.NewReader(data), slices.Values(solids)))
 	got, err := lewpath.New("a.txt").ReadFile(d)
 	require.NoError(t, err)
 	require.Equal(t, "hello", string(got))
@@ -143,7 +143,7 @@ func TestExtractIndependentSolidsStaging(t *testing.T) {
 		}
 		want[name] = append([]byte(nil), chunk...)
 	}
-	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, data, slices.Values(solids)))
+	require.NoError(t, extractSolids(t.Context(), Extractor{Dest: s}, bytes.NewReader(data), slices.Values(solids)))
 	require.Equal(t, want, s.files)
 }
 

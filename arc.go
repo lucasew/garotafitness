@@ -1,6 +1,7 @@
 package garotafitness
 
 import (
+	"bytes"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -23,14 +24,32 @@ type Member struct {
 }
 
 func parseVolume(name string, data []byte) (Volume, error) {
-	if len(data) < 4 || string(data[:4]) != arcMagic {
+	return parseVolumeAt(name, bytes.NewReader(data), int64(len(data)))
+}
+
+func parseVolumeAt(name string, ra io.ReaderAt, size int64) (Volume, error) {
+	if size < 4 {
 		return Volume{}, fmt.Errorf("%s: not ArC", name)
 	}
-	pos := lastSignature(data)
+	magic := make([]byte, 4)
+	if _, err := ra.ReadAt(magic, 0); err != nil {
+		return Volume{}, fmt.Errorf("%s: %w", name, err)
+	}
+	if string(magic) != arcMagic {
+		return Volume{}, fmt.Errorf("%s: not ArC", name)
+	}
+	pos, err := lastSignatureAt(ra, size)
+	if err != nil {
+		return Volume{}, fmt.Errorf("%s: %w", name, err)
+	}
 	if pos < 0 {
 		return Volume{}, fmt.Errorf("%s: no footer descriptor", name)
 	}
-	loc, err := parseLocal(data[pos:])
+	desc, err := readAt(ra, pos, size-pos)
+	if err != nil {
+		return Volume{}, fmt.Errorf("%s footer: %w", name, err)
+	}
+	loc, err := parseLocal(desc)
 	if err != nil {
 		return Volume{}, fmt.Errorf("%s footer: %w", name, err)
 	}
@@ -40,8 +59,12 @@ func parseVolume(name string, data []byte) (Volume, error) {
 	if loc.csz > uint64(pos) {
 		return Volume{}, fmt.Errorf("%s: footer compsize", name)
 	}
-	fpos := int64(pos) - int64(loc.csz)
-	footer, err := rawLZMA1(data[fpos:pos], int(loc.orig))
+	fpos := pos - int64(loc.csz)
+	comp, err := readAt(ra, fpos, int64(loc.csz))
+	if err != nil {
+		return Volume{}, fmt.Errorf("%s footer: %w", name, err)
+	}
+	footer, err := rawLZMA1(comp, int(loc.orig))
 	if err != nil {
 		return Volume{}, fmt.Errorf("%s footer lzma: %w", name, err)
 	}
@@ -60,7 +83,7 @@ func parseVolume(name string, data []byte) (Volume, error) {
 		if b.kind != BlockDir {
 			continue
 		}
-		ms, err := parseDir(data, b)
+		ms, err := parseDirAt(ra, size, b)
 		if err != nil {
 			return Volume{}, fmt.Errorf("%s dir: %w", name, err)
 		}
@@ -75,6 +98,31 @@ func parseVolume(name string, data []byte) (Volume, error) {
 		Algos:    mergeAlgos(pipes...),
 		Members:  members,
 	}, nil
+}
+
+func readAt(ra io.ReaderAt, off, n int64) ([]byte, error) {
+	if n < 0 || off < 0 {
+		return nil, fmt.Errorf("span")
+	}
+	buf := make([]byte, n)
+	_, err := io.ReadFull(io.NewSectionReader(ra, off, n), buf)
+	return buf, err
+}
+
+func lastSignatureAt(ra io.ReaderAt, size int64) (int64, error) {
+	n := int64(maxFooter)
+	if n > size {
+		n = size
+	}
+	buf, err := readAt(ra, size-n, n)
+	if err != nil {
+		return -1, err
+	}
+	rel := lastSignature(buf)
+	if rel < 0 {
+		return -1, nil
+	}
+	return size - n + int64(rel), nil
 }
 
 type localDesc struct {
@@ -212,10 +260,18 @@ func parseControl(footer []byte, footerPos int64) ([]ctrlBlock, error) {
 }
 
 func parseDir(data []byte, b ctrlBlock) ([]Member, error) {
-	if b.pos < 0 || b.csz > uint64(len(data)) || int(b.pos)+int(b.csz) > len(data) {
+	return parseDirAt(bytes.NewReader(data), int64(len(data)), b)
+}
+
+func parseDirAt(ra io.ReaderAt, size int64, b ctrlBlock) ([]Member, error) {
+	if b.pos < 0 || b.csz > uint64(size) || b.pos+int64(b.csz) > size {
 		return nil, fmt.Errorf("dir span")
 	}
-	raw, err := rawLZMA1(data[b.pos:int(b.pos)+int(b.csz)], int(b.orig))
+	comp, err := readAt(ra, b.pos, int64(b.csz))
+	if err != nil {
+		return nil, err
+	}
+	raw, err := rawLZMA1(comp, int(b.orig))
 	if err != nil {
 		return nil, err
 	}
