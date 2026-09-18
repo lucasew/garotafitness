@@ -74,6 +74,18 @@ func TestRecipeReplacementsAndManifestAppend(t *testing.T) {
 	require.NotContains(t, p.app.files, "Verify/extra.addon")
 }
 
+func TestRecipeFGPackTwoArgAndSevenZ(t *testing.T) {
+	p := testPlan()
+	p.app.files["inner/0001.fgu"] = []byte("one")
+	p.app.files["inner/0002.fgu"] = []byte("two")
+	p.app.files["0001.shapes"] = []byte("shape")
+	require.NoError(t, p.recipe(t.Context(), `fgpack.exe 0001.shapes 0001.fgr_`, "app", 0))
+	require.Greater(t, len(p.app.files["0001.fgr_"]), 0)
+	require.NoError(t, p.recipe(t.Context(), `7z.exe a -ms=off -mtc=off -mtm=off -mta=off -m0=lzma:x=4:d=512k inner.fgpack inner\*.fgu`, "app", 0))
+	require.Greater(t, len(p.app.files["inner.fgpack"]), 32)
+	require.Equal(t, []byte{0x37, 0x7a, 0xbc, 0xaf, 0x27, 0x1c}, p.app.files["inner.fgpack"][:6])
+}
+
 func TestRecipeRejectsUnknownProgramsAndEscapes(t *testing.T) {
 	for _, line := range []string{"unknown.exe input output", "del ../../escape", "del {src}\\fg-01.bin", "echo harmless | unknown.exe", "move missing destination"} {
 		p := testPlan()
