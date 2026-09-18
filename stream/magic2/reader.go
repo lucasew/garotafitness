@@ -22,7 +22,7 @@ func NewReader(src io.Reader) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	if h.Independent || h.Workers != 1 || h.LongDistance || h.ROLZ || !h.Mixed || h.LiteralMode != 0 || h.ColorMode > 3 || h.AlphaMode > 4 || h.ImageMode != 0 {
+	if h.LongDistance || h.ROLZ || !h.Mixed || h.LiteralMode != 0 || h.ColorMode > 3 || h.AlphaMode > 4 || h.ImageMode != 0 {
 		return nil, fmt.Errorf("magic2: unsupported decoder options %+v", h)
 	}
 	return &reader{src: src, decoder: newDecoder(h)}, nil
@@ -105,7 +105,7 @@ func (r *reader) fill() error {
 		}
 		return io.EOF
 	}
-	if s.size == 0 || s.size > 512<<20 || s.packed == 0 || s.packed > 512<<20 || uint64(len(r.decoder.out))+uint64(s.size) > 1<<30 {
+	if s.size == 0 || s.size > 512<<20 || s.packed == 0 || s.packed > 512<<20 {
 		return errBitstream
 	}
 	data := make([]byte, s.packed)
@@ -116,7 +116,8 @@ func (r *reader) fill() error {
 	if err := r.decoder.decode(data, s); err != nil {
 		return fmt.Errorf("magic2: segment at %d (option %d, size %d, aux %d): %w", start, s.option, s.size, s.aux, err)
 	}
-	r.buf = r.decoder.out[start:]
+	r.buf = append([]byte(nil), r.decoder.out[start:]...)
+	r.decoder.slide()
 	return nil
 }
 

@@ -12,8 +12,10 @@ import (
 	"github.com/lewtec/lewkit/x/taskgroup"
 	"github.com/lucasew/garotafitness/reconstruct/fgpack"
 	"github.com/lucasew/garotafitness/reconstruct/fsb"
+	"github.com/lucasew/garotafitness/reconstruct/sevenz"
 	"github.com/lucasew/garotafitness/reconstruct/x2"
 	"github.com/lucasew/garotafitness/reconstruct/x3"
+	"github.com/lucasew/garotafitness/reconstruct/x4"
 	"github.com/lucasew/garotafitness/reconstruct/x5"
 	"github.com/lucasew/garotafitness/reconstruct/xdelta"
 )
@@ -373,6 +375,46 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 		}
 		slog.Info("x5", "old", a[0], "diff", a[1], "dst", dst, "in", len(old), "out", len(out))
 		return put(a[2], out)
+	case "7z.exe":
+		archive, sources, err := sevenzArgs(a)
+		if err != nil {
+			return err
+		}
+		var files []sevenz.File
+		for _, pattern := range sources {
+			n, err := resolve(pattern)
+			if err != nil {
+				return err
+			}
+			matches, err := p.matches(n, false)
+			if err != nil {
+				return err
+			}
+			if len(matches) == 0 && !strings.ContainsAny(pattern, "*?[") {
+				return fmt.Errorf("missing 7z source %s", pattern)
+			}
+			for _, m := range matches {
+				b, err := p.read(m)
+				if err != nil {
+					return err
+				}
+				files = append(files, sevenz.File{Name: lewpath.New(m).Name(), Data: b})
+			}
+		}
+		out, err := sevenz.Encode(ctx, files)
+		if err != nil {
+			return err
+		}
+		dst, err := resolve(archive)
+		if err != nil {
+			return err
+		}
+		slog.Info("7z", "dst", dst, "files", len(files), "out", len(out))
+		return put(archive, out)
+	case "x5n.exe":
+		return p.x5n(ctx, a, cwd)
+	case "x4.exe":
+		return p.x4(a, cwd)
 	case "fgpack.exe":
 		options, source, dest, err := packingOptions(a)
 		if err != nil {
@@ -497,6 +539,9 @@ func (p *reconstructionPlan) words(ctx context.Context, w []string, cwd string, 
 func packingOptions(args []string) (fgpack.Options, string, string, error) {
 	o := fgpack.DefaultOptions()
 	var files []string
+	if len(args) == 2 && !strings.HasPrefix(args[0], "-") && args[0] != "e" {
+		return o, args[0], args[1], nil
+	}
 	if len(args) == 0 || args[0] != "e" {
 		return o, "", "", fmt.Errorf("unsupported fgpack operation")
 	}
@@ -527,4 +572,148 @@ func packingOptions(args []string) (fgpack.Options, string, string, error) {
 		return o, "", "", fmt.Errorf("invalid fgpack file parameters")
 	}
 	return o, files[0], files[1], nil
+}
+
+func sevenzArgs(args []string) (string, []string, error) {
+	if len(args) == 0 || args[0] != "a" {
+		return "", nil, fmt.Errorf("unsupported 7z operation")
+	}
+	var archive string
+	var sources []string
+	for _, arg := range args[1:] {
+		if strings.HasPrefix(arg, "-") {
+			switch {
+			case arg == "-ms=off", arg == "-mtc=off", arg == "-mtm=off", arg == "-mta=off":
+			case strings.HasPrefix(arg, "-m0=lzma"):
+			default:
+				return "", nil, fmt.Errorf("unsupported 7z option %q", arg)
+			}
+			continue
+		}
+		if archive == "" {
+			archive = arg
+			continue
+		}
+		sources = append(sources, arg)
+	}
+	if archive == "" || len(sources) == 0 {
+		return "", nil, fmt.Errorf("invalid 7z file parameters")
+	}
+	return archive, sources, nil
+}
+
+func (p *reconstructionPlan) x5n(ctx context.Context, a []string, cwd string) error {
+	var files []string
+	for i := 0; i < len(a); i++ {
+		switch {
+		case a[i] == "-f":
+		case strings.HasPrefix(a[i], "-s-"):
+		case strings.HasPrefix(a[i], "-"):
+			return fmt.Errorf("unsupported HDiffPatch option %s", a[i])
+		default:
+			files = append(files, a[i])
+		}
+	}
+	if len(files) != 3 {
+		return fmt.Errorf("unsupported HDiffPatch parameters")
+	}
+	if files[0] == "." && files[2] == "." {
+		return p.x5nDir(ctx, files[1], cwd)
+	}
+	old, err := p.read(mustVirtual(files[0], cwd))
+	if err != nil {
+		return err
+	}
+	diff, err := p.read(mustVirtual(files[1], cwd))
+	if err != nil {
+		return err
+	}
+	out, err := x5.Apply(ctx, old, diff)
+	if err != nil {
+		return err
+	}
+	return p.put(mustVirtual(files[2], cwd), out)
+}
+
+func mustVirtual(name, cwd string) string {
+	n, err := virtualPath(name, cwd)
+	if err != nil {
+		return name
+	}
+	return n
+}
+
+func (p *reconstructionPlan) x5nDir(ctx context.Context, patch, cwd string) error {
+	name, err := virtualPath(patch, cwd)
+	if err != nil {
+		return err
+	}
+	diff, err := p.read(name)
+	if err != nil {
+		return err
+	}
+	old, err := p.dirBytes(cwd)
+	if err != nil {
+		return err
+	}
+	out, err := x5.Apply(ctx, old, diff)
+	if err != nil {
+		return fmt.Errorf("x5n: %w", err)
+	}
+	return p.putDirBytes(cwd, out)
+}
+
+func (p *reconstructionPlan) dirBytes(cwd string) ([]byte, error) {
+	return nil, fmt.Errorf("x5n: directory patch requires unpacked new.x5n")
+}
+
+func (p *reconstructionPlan) putDirBytes(cwd string, _ []byte) error {
+	return fmt.Errorf("x5n: directory patch requires unpacked new.x5n")
+}
+
+func (p *reconstructionPlan) x4(a []string, cwd string) error {
+	if len(a) != 4 {
+		return fmt.Errorf("invalid x4 parameters")
+	}
+	src, err := virtualPath(a[0], cwd)
+	if err != nil {
+		return err
+	}
+	dst, err := virtualPath(a[1], cwd)
+	if err != nil {
+		return err
+	}
+	s, rel, err := p.store(src)
+	if err != nil {
+		return err
+	}
+	root, _, _ := strings.Cut(src, "/")
+	prefix := strings.ToLower(rel)
+	p.mu.Lock()
+	var matches []string
+	for name := range s.files {
+		low := strings.ToLower(name)
+		if prefix == "" || low == prefix || strings.HasPrefix(low, prefix+"/") {
+			matches = append(matches, root+"/"+name)
+		}
+	}
+	p.mu.Unlock()
+	var files []x4.File
+	for _, m := range matches {
+		b, err := p.read(m)
+		if err != nil {
+			return err
+		}
+		name := strings.TrimPrefix(m, src+"/")
+		if name == m {
+			name = lewpath.New(m).Name()
+		}
+		files = append(files, x4.File{Name: name, Data: b})
+	}
+	out, err := x4.Pack(files, a[2], a[3])
+	if err != nil {
+		return err
+	}
+	slog.Info("x4", "src", src, "dst", dst, "files", len(files), "out", len(out))
+	return p.put(dst, out)
 }

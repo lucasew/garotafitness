@@ -24,6 +24,18 @@ type decoder struct {
 func newDecoder(h Header) *decoder {
 	return &decoder{header: h, colorSelector: 0x2000, alphaSelector: 0x6000, models: make(map[int][]uint16), probabilities: make(map[int]uint16), weights: make(map[int]uint16)}
 }
+
+func (d *decoder) slide() {
+	keep := int(d.header.DictionarySize)
+	if keep < 64<<20 {
+		keep = 64 << 20
+	}
+	if len(d.out) <= keep*2 {
+		return
+	}
+	drop := len(d.out) - keep
+	d.out = append([]byte(nil), d.out[drop:]...)
+}
 func (d *decoder) model(a, n int) []uint16 {
 	c := d.models[a]
 	if c == nil {
