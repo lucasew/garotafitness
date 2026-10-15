@@ -1,6 +1,9 @@
 package garotafitness
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
@@ -40,8 +43,16 @@ func TestFS25X4XdeltaStep(t *testing.T) {
 	require.NoError(t, err)
 	t.Logf("x4 out=%d", len(dlc))
 
-	_, err = xdelta.Apply(t.Context(), dlc, patch)
+	out, err := xdelta.Apply(t.Context(), dlc, patch)
 	require.NoError(t, err, "x4 output must be a valid xdelta source for the FitGirl patch")
+	require.Len(t, out, 133888)
+	sum := sha256.Sum256(out)
+	require.Equal(t, "bb21747f2de2a59b6b8c7e0b530411dee93e757cf1061b571fd1a39e8a678eb9", hex.EncodeToString(sum[:]))
+
+	var streamed bytes.Buffer
+	err = xdelta.ApplyStream(t.Context(), bytes.NewReader(dlc), int64(len(dlc)), bytes.NewReader(patch), int64(len(patch)), xdelta.SeqWriter(&streamed))
+	require.NoError(t, err)
+	require.Equal(t, out, streamed.Bytes())
 }
 
 func loadX4Fixture(t *testing.T, pack string) map[string][]byte {

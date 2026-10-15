@@ -232,3 +232,4 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - ADR-0005: One Algo package at module root. Superseded by ADR-0007.
 - ADR-0006: SREP v3 Future-LZ stays C++; Go owns the block loop. Guest is emscripten wasm. Go port later.
 - ADR-0007: Stream atoms under `stream/`, reconstruction under `reconstruct/`. `Algo` is stream-only. Root still owns `Decode`.
+- ADR-0008: xdelta decode is native Go. `third_party/xdelta3` stays the cited behavior. Secondary compressors stay rejected.
