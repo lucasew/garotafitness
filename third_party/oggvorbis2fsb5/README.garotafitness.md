@@ -4,7 +4,7 @@ Sources for the FSB5 remux Guest:
 - [libogg](https://github.com/xiph/ogg), pinned submodule commit `bada45718453ac27b56773ae663f7e65112f6a6e` (BSD, `ogg/COPYING`).
 - [libvorbis](https://github.com/xiph/vorbis), pinned submodule commit `0657aee69dec8508a0011f47f3b69d7538e9d262` (BSD, `vorbis/COPYING`).
 
-Only the C sources and headers required by the remuxer are included. The remuxer
-uses stdin/stdout in place of the two filename arguments, rejects empty input,
-and checks stream I/O errors. Its packet and FSB5 serialization are unchanged.
-Build with `make -C reconstruct/fsb` using the project's emscripten toolchain.
+Only the C sources and headers required by the remuxer are included.
+`reconstruct/fsb` remuxes in Go. Packet framing and FSB5 serialization follow
+this tree. The loop-point chunk is not written: the guest ran as
+`("fsb", "-", "-")`.

@@ -2,6 +2,6 @@
 `4c752d8a96452e754d59e34ca8952405e4f0cc7e`.
 
 These four unmodified files come from `libHDiffPatch/HPatch`. Their MIT license
-is included in each file. The wrapper in `reconstruct/x5n/guest/main.c` applies
-uncompressed HDIFFSF20 streams used inside HDIFF19 directory patches. Build
-with `make -C reconstruct/x5n` using the project's emscripten toolchain.
+is included in each file. `reconstruct/x5n` applies uncompressed HDIFFSF20
+streams (`compressedSize` 0) in Go. The HDIFF19 directory head stays in
+`reconstruct/x5n/dir.go`.
