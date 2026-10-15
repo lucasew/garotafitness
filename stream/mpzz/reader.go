@@ -19,7 +19,6 @@ const (
 )
 
 // NewReader wraps an OGGRE stream as compress/gzip does.
-// Decompression runs in the wasm guest (single-threaded wazero).
 func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 	if r == nil {
 		return nil, errNil

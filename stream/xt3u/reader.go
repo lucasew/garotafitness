@@ -69,7 +69,6 @@ type reader struct {
 	src       *bufio.Reader
 	hdr       Header
 	dd        *xtl.Dedup
-	g         *lz4guest
 	headers   []streamHeader
 	block     []byte
 	blockOff  int
@@ -108,10 +107,6 @@ func (r *reader) Read(p []byte) (int, error) {
 func (r *reader) Close() error {
 	r.err = errClosed
 	r.out = nil
-	if r.g != nil {
-		_ = r.g.Close()
-		r.g = nil
-	}
 	return nil
 }
 
@@ -273,14 +268,11 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 		if blk != 0 {
 			return nil, fmt.Errorf("xt3u: lz4hc block %d", blk)
 		}
-		if err := r.ensureGuest(); err != nil {
-			return nil, err
+		bound := lz4CompressBound(len(raw))
+		if bound <= 0 {
+			return nil, errGuest
 		}
-		bound, err := r.g.compressBound(len(raw))
-		if err != nil {
-			return nil, err
-		}
-		out, err := r.g.compressHC(raw, level, bound)
+		out, err := compressHC(raw, level, bound)
 		if err != nil {
 			return nil, err
 		}
@@ -302,14 +294,11 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 		if blk != 0 {
 			return nil, fmt.Errorf("xt3u: lz4 block %d", blk)
 		}
-		if err := r.ensureGuest(); err != nil {
-			return nil, err
+		bound := lz4CompressBound(len(raw))
+		if bound <= 0 {
+			return nil, errGuest
 		}
-		bound, err := r.g.compressBound(len(raw))
-		if err != nil {
-			return nil, err
-		}
-		out, err := r.g.compressFast(raw, accel, bound)
+		out, err := compressFast(raw, accel, bound)
 		if err != nil {
 			return nil, err
 		}
@@ -326,13 +315,10 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 }
 
 func (r *reader) applyPatch(prefix, patch []byte, want int) ([]byte, error) {
-	if err := r.ensureGuest(); err != nil {
-		return nil, err
-	}
 	if want <= 0 {
 		return nil, fmt.Errorf("xt3u: patch size %d", want)
 	}
-	out, err := r.g.decodePrefix(patch, prefix, want, windowLog(len(prefix)))
+	out, err := decodePrefix(patch, prefix, want, windowLog(len(prefix)))
 	if err != nil {
 		return nil, fmt.Errorf("xt3u: patch: %w", err)
 	}
@@ -353,18 +339,6 @@ func windowLog(prefix int) int {
 		n++
 	}
 	return n + 1
-}
-
-func (r *reader) ensureGuest() error {
-	if r.g != nil {
-		return nil
-	}
-	g, err := openGuest(r.ctx)
-	if err != nil {
-		return err
-	}
-	r.g = g
-	return nil
 }
 
 func isLZ4Method(m string) bool {

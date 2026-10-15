@@ -67,7 +67,6 @@ type reader struct {
 	src       *bufio.Reader
 	hdr       Header
 	dd        *xtl.Dedup
-	g         *prefguest
 	headers   []streamHeader
 	block     []byte
 	blockOff  int
@@ -106,10 +105,6 @@ func (r *reader) Read(p []byte) (int, error) {
 func (r *reader) Close() error {
 	r.err = errClosed
 	r.out = nil
-	if r.g != nil {
-		_ = r.g.Close()
-		r.g = nil
-	}
 	return nil
 }
 
@@ -300,10 +295,7 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 		}
 		return out, nil
 	case h.Codec == codecZLib && sub == subPreflate, sub == subPreflate && xtl.ContainsToken(r.hdr.Method, "preflate"):
-		if err := r.ensureGuest(); err != nil {
-			return nil, err
-		}
-		out, err := r.g.preflate(raw, ext, int(h.OldSize))
+		out, err := preflate(raw, ext, int(h.OldSize))
 		if err != nil {
 			return nil, err
 		}
@@ -314,18 +306,6 @@ func (r *reader) restore(h streamHeader, raw, ext []byte) ([]byte, error) {
 	default:
 		return nil, fmt.Errorf("%w codec=%d opt=%#x kind=%d", errCodec, h.Codec, uint32(h.Option), h.Kind)
 	}
-}
-
-func (r *reader) ensureGuest() error {
-	if r.g != nil {
-		return nil
-	}
-	g, err := openGuest(r.ctx)
-	if err != nil {
-		return err
-	}
-	r.g = g
-	return nil
 }
 
 func decodeChunk(ctx context.Context, payload []byte, hdr Header) ([]byte, error) {

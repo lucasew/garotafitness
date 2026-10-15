@@ -233,3 +233,4 @@ Residual risk: a bug in a Guest can corrupt Dest or exhaust memory inside the 4 
 - ADR-0006: SREP v3 Future-LZ stays C++; Go owns the block loop. Guest is emscripten wasm. Go port later.
 - ADR-0007: Stream atoms under `stream/`, reconstruction under `reconstruct/`. `Algo` is stream-only. Root still owns `Decode`.
 - ADR-0008: x5 and x5n apply uncompressed HDIFF in Go. reconstruct/fsb remuxes Ogg Vorbis to FSB5 in Go. Compressed HDiff streams stay rejected.
+- ADR-0009: SREP Future-LZ, MPZ, MPZZ, Tornado, xt2png preflate, xt3u LZ4 and zstd prefix, and the sevenz and fgpack LZMA encoders run in Go. pref and xdelta stay wasm.

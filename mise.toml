@@ -44,21 +44,17 @@ run = "go test -count=1 ./..."
 description = "Run all tests"
 depends = ["test:*"]
 
-[tasks."build:srep"]
-description = "SREP guest: committed wasm, or emcc when WASM_REBUILD=1"
-run = "make -C stream/srep"
-
 [tasks."build:pref"]
 description = "Precomp restore guest: committed wasm, or emcc when WASM_REBUILD=1"
 run = "make -C stream/pref"
 
 [tasks."build:reconstruction"]
 description = "Reconstruction guests: committed wasm, or emcc when WASM_REBUILD=1"
-run = "make -C reconstruct/sevenz && make -C reconstruct/fgpack && make -C reconstruct/xdelta && make -C stream/mpz && make -C stream/pref && make -C stream/xt2png && make -C stream/tor"
+run = "make -C reconstruct/xdelta && make -C stream/pref"
 
 [tasks."build:garotafitness"]
 description = "Build garotafitness into bin/"
-depends = ["build:srep", "build:reconstruction"]
+depends = ["build:reconstruction"]
 run = "go build -o bin/garotafitness ./cmd/garotafitness"
 
 [tasks.build]

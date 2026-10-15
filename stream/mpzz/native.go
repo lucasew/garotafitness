@@ -15,7 +15,8 @@ type cachedHeaders struct {
 }
 
 type oggreDecoder struct {
-	r          io.Reader
+	src        []byte
+	pos        int
 	h          header
 	cmd        *rangeDecoder
 	control    [18]uint16
@@ -34,12 +35,13 @@ type oggreDecoder struct {
 	lastCached cachedHeaders
 }
 
-func newOGGREDecoder(r io.Reader, h header) (*oggreDecoder, error) {
-	frame, err := readFrame(r)
+func newOGGREDecoder(src []byte, h header) (*oggreDecoder, error) {
+	d := &oggreDecoder{src: src, h: h, models: make([]integerModel, 55)}
+	frame, err := d.takeFrame()
 	if err != nil {
 		return nil, err
 	}
-	d := &oggreDecoder{r: r, h: h, cmd: newRange(frame), models: make([]integerModel, 55)}
+	d.cmd = newRange(frame)
 	for i := range d.models {
 		d.models[i].reset()
 	}
@@ -54,14 +56,52 @@ func newOGGREDecoder(r io.Reader, h header) (*oggreDecoder, error) {
 	return d, d.cmd.err
 }
 
-func (d *oggreDecoder) next() ([]byte, error) {
-	d.previous = d.cmd.bit(&d.control[d.previous])
-	if d.cmd.err != nil {
-		return nil, d.cmd.err
+// takeFrame reads one length-prefixed frame. io.EOF means the cursor is
+// already at the end of the buffer (a clean raw-stream end). Bytes left
+// over are a hard error, and the cursor stays where the size prefix ended.
+func (d *oggreDecoder) takeFrame() ([]byte, error) {
+	if d.pos >= len(d.src) {
+		return nil, io.EOF
 	}
+	b0 := d.src[d.pos]
+	d.pos++
+	extra := int(b0 & 3)
+	if extra > len(d.src)-d.pos {
+		if d.pos >= len(d.src) {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("mpzz: truncated frame")
+	}
+	var hdr [4]byte
+	hdr[0] = b0
+	copy(hdr[1:], d.src[d.pos:d.pos+extra])
+	d.pos += extra
+	n := int(binary.LittleEndian.Uint32(hdr[:]) >> 2)
+	if n > 512<<20 || n > len(d.src)-d.pos {
+		if d.pos >= len(d.src) {
+			return nil, io.EOF
+		}
+		return nil, fmt.Errorf("mpzz: truncated frame")
+	}
+	b := append([]byte(nil), d.src[d.pos:d.pos+n]...)
+	d.pos += n
+	return b, nil
+}
+
+func (d *oggreDecoder) next() ([]byte, error) {
+	// A failed command bit ends the stream. previous stays on the last
+	// successful decision, matching the kernel's clean EOF (rc 1).
+	bit := d.cmd.bit(&d.control[d.previous])
+	if d.cmd.err != nil {
+		return nil, io.EOF
+	}
+	d.previous = bit
 	if d.previous == 0 {
-		b, err := readFrame(d.r)
+		b, err := d.takeFrame()
 		if err != nil {
+			if err == io.EOF {
+				return nil, io.EOF
+			}
 			return nil, err
 		}
 		if len(b) == 0 {
@@ -98,9 +138,11 @@ func (d *oggreDecoder) next() ([]byte, error) {
 	store := d.cmd.bit(&d.control[6]) != 0
 	var ranges [3]*rangeDecoder
 	for i := range ranges {
-		b, err := readFrame(d.r)
+		b, err := d.takeFrame()
 		if err != nil {
-			return nil, err
+			// Any short aux/header/body frame fails the whole buffer,
+			// including a cursor that has reached the end.
+			return nil, fmt.Errorf("mpzz: record frame: %v", err)
 		}
 		DebugFrames[i] = len(b)
 		ranges[i] = newRange(b)

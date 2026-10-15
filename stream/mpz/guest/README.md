@@ -1,7 +1,8 @@
-The decoder is a static C translation of the MPZ 5.4.5.1 implementation in
+The decoder is a static translation of the MPZ 5.4.5.1 implementation in
 RimWorld's MpzSlimmer.dll. No PE code is loaded or interpreted during extraction.
-The WASM module contains compiled C routines with fixed control flow, bounded
-model memory, and memory streams in place of CRT file operations.
+`decoder.c` is that translation. `c2go.py` turns it into `lift.go` and
+`tables.go`, and `vm.go` is the machine those functions call. Control flow is
+fixed, model memory is bounded, and the old CRT file operations are memory streams.
 
 The installer stores this DLL at offsets 0x46f873–0x49b873 of its decompressed
 payload. Restore Inno's E8/E9 filter before disassembly. `lift.py` checks the
@@ -17,18 +18,19 @@ restored DLL's SHA-256 and rejects other versions. The translation includes:
 `mpz-tables.inc` contains constant data, including MP3 Huffman tables. Dynamic
 probability tables are initialized by the translated routines. Arithmetic
 uses explicit 32-bit wraparound. Dead arithmetic flags are removed by the
-static translator. Unsupported callbacks and invalid memory accesses abort
-the WASM call; wazero reports an error to the Go reader.
+static translator. Unsupported callbacks and invalid memory accesses abort the decode. The Go
+reader returns that error.
 
 To reproduce the C translation with the local corpus and LLVM tools:
 
 ```sh
 llvm-objdump -d --no-show-raw-insn MpzSlimmer.dll > mpzdll.asm
 python3 stream/mpz/guest/lift.py MpzSlimmer.dll mpzdll.asm stream/mpz/guest
-make -C stream/mpz
+python3 stream/mpz/guest/c2go.py
+gofmt -w stream/mpz/lift.go stream/mpz/tables.go
 ```
 
-`decoder.c` and the tables are checked in, so ordinary builds need neither the
-installer nor the offline translation tools. Compile with the toolchain in
-`mise.toml`. The Go reader separately supports the 5.4.5.0 complemented literal
-format, bounds input/output sizes, and checks the reconstructed output length.
+`decoder.c`, `lift.go`, and the tables are checked in, so ordinary builds need
+neither the installer nor the offline translation tools. The Go reader
+separately supports the 5.4.5.0 complemented literal format, bounds input and
+output sizes, and checks the reconstructed output length.
