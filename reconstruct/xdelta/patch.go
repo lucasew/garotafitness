@@ -1,18 +1,15 @@
-// Package xdelta applies VCDIFF patches with the official xdelta3 decoder.
+// Package xdelta applies uncompressed VCDIFF patches.
+// Decode follows third_party/xdelta3 v3.1.0: default code table, Adler32,
+// source copies, 32-bit sizes, and 64-bit copy offsets. Secondary compressors
+// and custom code tables are rejected.
 package xdelta
 
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"fmt"
 	"io"
-
-	"github.com/lucasew/garotafitness/internal/wasmrun"
 )
-
-//go:embed xdelta.wasm
-var guest []byte
 
 // Apply reconstructs a file and checks each VCDIFF window's embedded checksum.
 func Apply(ctx context.Context, old, diff []byte) ([]byte, error) {
@@ -20,18 +17,19 @@ func Apply(ctx context.Context, old, diff []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := wasmrun.Bytes(ctx, guest, "xdelta_apply", n, old, diff)
-	if err != nil {
+	buf := make([]byte, n)
+	w := sliceAt{buf: buf}
+	if err := ApplyStream(ctx, bytes.NewReader(old), int64(len(old)), bytes.NewReader(diff), int64(len(diff)), &w); err != nil {
 		return nil, err
 	}
-	if len(out) != n {
+	if w.n != n {
 		return nil, fmt.Errorf("xdelta: target size mismatch")
 	}
-	return out, nil
+	return buf, nil
 }
 
-// Read the window envelopes to bound allocation; the official decoder validates
-// instructions, source ranges, addresses, and Adler32 checksums inside them.
+// Read the window envelopes to bound allocation. Apply checks instructions,
+// source ranges, addresses, and Adler32 checksums inside them.
 func targetSize(diff []byte) (int, error) {
 	if len(diff) < 5 || !bytes.Equal(diff[:4], []byte{0xd6, 0xc3, 0xc4, 0}) || diff[4]&^4 != 0 {
 		return 0, fmt.Errorf("xdelta: unsupported VCDIFF header")
