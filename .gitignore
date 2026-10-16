@@ -3,8 +3,4 @@
 /tmp/
 stream/xt2png/build/
 *.wasm
-!stream/magic2/magic2dec.wasm
-!stream/rzw/rzwdec.wasm
-!stream/pref/prefdec.wasm
 /stream/pref/build/
-!reconstruct/xdelta/xdelta.wasm

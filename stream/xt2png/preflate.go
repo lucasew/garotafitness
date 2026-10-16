@@ -6,6 +6,12 @@ import "fmt"
 // stream. It is the single-threaded preflate_reencode path (extraThreadCount
 // is 0, so each meta block is decoded and written inline).
 
+// Reencode turns unpacked bytes and a preflate diff into a raw deflate stream.
+// stream/pref uses the same single-threaded preflate_reencode path.
+func Reencode(raw, diff []byte) ([]byte, bool) {
+	return preflateReencode(raw, diff)
+}
+
 func preflate(raw, diff []byte, dstCap int) ([]byte, error) {
 	if dstCap <= 0 {
 		dstCap = len(raw) + len(diff) + 64

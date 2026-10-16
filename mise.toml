@@ -44,13 +44,9 @@ run = "go test -count=1 ./..."
 description = "Run all tests"
 depends = ["test:*"]
 
-[tasks."build:pref"]
-description = "Precomp restore guest: committed wasm, or emcc when WASM_REBUILD=1"
-run = "make -C stream/pref"
-
 [tasks."build:reconstruction"]
-description = "Reconstruction guests: committed wasm, or emcc when WASM_REBUILD=1"
-run = "make -C reconstruct/xdelta && make -C stream/pref"
+description = "Codecs are Go; no reconstruction wasm guest"
+run = "true"
 
 [tasks."build:garotafitness"]
 description = "Build garotafitness into bin/"
