@@ -1574,9 +1574,8 @@ func GetOptimum(p *CLzmaEnc, position UInt32) uint32 {
 						opt     *COptimal
 						lenNorm uint32 = len_ - 2
 					)
-					if lenNorm < uint32(int32(kNumLenToPosStates-1)) {
-						lenNorm = lenNorm
-					} else {
+					// GetLenToPosState2: keep lenNorm when it is already below the table.
+					if lenNorm >= uint32(int32(kNumLenToPosStates-1)) {
 						lenNorm = uint32(int32(kNumLenToPosStates - 1))
 					}
 					if dist < UInt32(1<<(int32(kEndPosModelIndex>>1))) {
