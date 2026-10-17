@@ -1,18 +1,12 @@
 package sevenz
 
 import (
-	"bytes"
 	"context"
-	_ "embed"
 	"encoding/binary"
 	"fmt"
 
-	"github.com/lucasew/garotafitness/internal/wasmrun"
-	"github.com/tetratelabs/wazero"
+	"github.com/lucasew/garotafitness/reconstruct/sevenz/lzma"
 )
-
-//go:embed sevenzenc.wasm
-var guest []byte
 
 type lzmaOpts struct {
 	dictLog, fb, lc, lp, pb int
@@ -30,26 +24,30 @@ func headerOpts() lzmaOpts {
 	return lzmaOpts{dictLog: 20, fb: 273, lc: 3, lp: 0, pb: 2, algo: 1, btMode: 1, hashBytes: 2}
 }
 
-type lzmaEnc struct{ inst *wasmrun.Instance }
+type lzmaEnc struct{ closed bool }
 
 func newLzmaEnc(ctx context.Context) (*lzmaEnc, error) {
-	inst, err := wasmrun.Open(ctx, wazero.NewCompilationCache(), guest, "sevenz", wasmrun.Emscripten(nil), nil)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &lzmaEnc{inst: inst}, nil
+	return &lzmaEnc{}, nil
 }
 
 func (e *lzmaEnc) Close(ctx context.Context) error {
-	if e == nil || e.inst == nil {
+	if e == nil {
 		return nil
 	}
-	err := e.inst.Close(ctx)
-	e.inst = nil
-	return err
+	e.closed = true
+	return nil
 }
 
 func (e *lzmaEnc) encode(ctx context.Context, data []byte, o lzmaOpts) ([]byte, error) {
+	if e == nil || e.closed {
+		return nil, fmt.Errorf("sevenz: rejected input")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("sevenz: %w", err)
+	}
 	n := 36
 	if o.reduce != 0 {
 		n = 40
@@ -61,47 +59,12 @@ func (e *lzmaEnc) encode(ctx context.Context, data []byte, o lzmaOpts) ([]byte, 
 	if n >= 40 {
 		binary.LittleEndian.PutUint32(config[32:], o.reduce)
 	}
-	capacity := len(data) + len(data)/3 + 65536
-	mod := e.inst.Mod
-	alloc := func(n int) (uint64, error) {
-		v, err := mod.ExportedFunction("malloc").Call(ctx, uint64(max(1, n)))
-		if err != nil {
-			return 0, err
-		}
-		if v[0] == 0 {
-			return 0, fmt.Errorf("sevenz: allocation failed")
-		}
-		return v[0], nil
-	}
-	free := func(p uint64) { _, _ = mod.ExportedFunction("free").Call(ctx, p) }
-	src, err := alloc(len(data))
-	if err != nil {
-		return nil, err
-	}
-	defer free(src)
-	cfg, err := alloc(len(config))
-	if err != nil {
-		return nil, err
-	}
-	defer free(cfg)
-	outp, err := alloc(capacity)
-	if err != nil {
-		return nil, err
-	}
-	defer free(outp)
-	if !mod.Memory().Write(uint32(src), data) || !mod.Memory().Write(uint32(cfg), config) {
-		return nil, fmt.Errorf("sevenz: input outside memory")
-	}
-	v, err := mod.ExportedFunction("sevenz_lzma").Call(ctx, src, uint64(len(data)), cfg, uint64(len(config)), outp, uint64(capacity))
-	if err != nil {
-		return nil, fmt.Errorf("sevenz: %w", err)
-	}
-	if v[0] == 0 || v[0] > uint64(capacity) {
+	out := lzma.Encode(data, config)
+	if out == nil {
 		return nil, fmt.Errorf("sevenz: rejected input")
 	}
-	out, ok := mod.Memory().Read(uint32(outp), uint32(v[0]))
-	if !ok {
-		return nil, fmt.Errorf("sevenz: output outside memory")
+	if len(out) < 13 {
+		return nil, fmt.Errorf("sevenz: short LZMA stream")
 	}
-	return bytes.Clone(out), nil
+	return out, nil
 }

@@ -4,20 +4,15 @@ package tor
 import (
 	"bytes"
 	"context"
-	_ "embed"
 	"errors"
 	"fmt"
 	"io"
-
-	"github.com/lucasew/garotafitness/internal/wasmrun"
 )
 
-//go:embed tordec.wasm
-var guestWASM []byte
-
 var (
-	errNil   = errors.New("tor: nil reader")
-	errGuest = errors.New("tor: guest")
+	errNil    = errors.New("tor: nil reader")
+	errGuest  = errors.New("tor: guest")
+	errFormat = errors.New("tor: format")
 )
 
 // NewReader wraps an official Tornado stream as compress/gzip does.
@@ -37,15 +32,26 @@ func NewReader(ctx context.Context, r io.Reader) (io.ReadCloser, error) {
 }
 
 func decode(ctx context.Context, in []byte) ([]byte, error) {
-	if len(guestWASM) == 0 {
-		return nil, errGuest
-	}
 	if len(in) == 0 {
 		return nil, nil
 	}
-	cap := len(in)*8 + 1<<20
-	if cap < 4<<20 {
-		cap = 4 << 20
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
-	return wasmrun.Bytes(ctx, guestWASM, "tor_decode", cap, in)
+	// Same output ceiling the wasm guest was given.
+	limit := len(in)*8 + 1<<20
+	if limit < 4<<20 {
+		limit = 4 << 20
+	}
+	out, err := decompress(ctx, in, limit)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
+		return nil, errGuest
+	}
+	if len(out) == 0 {
+		return nil, errGuest
+	}
+	return out, nil
 }

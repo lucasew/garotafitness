@@ -1,6 +1,7 @@
 package magic2
 
 import (
+	"context"
 	"fmt"
 	"math/bits"
 )
@@ -127,7 +128,10 @@ var shortState = [...]int{12, 12, 12, 12, 12, 12, 12, 12, 12, 12, 14, 14, 14, 14
 var repeatSlots = [...]int{0, 1, 2, 3, 17, 18, 0}
 var extendedSlots = [...]int{4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 19, 20, 21}
 
-func (d *decoder) decode(data []byte, s segment) error {
+func (d *decoder) decode(ctx context.Context, data []byte, s segment) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if s.option == 63 {
 		d.out = append(d.out, data...)
 		return nil
@@ -140,7 +144,14 @@ func (d *decoder) decode(data []byte, s segment) error {
 	end := start + int(s.size)
 	mask := int(positionMasks[s.option])
 	cfg := d.header
+	step := 0
 	for len(d.out) < end && r.err == nil {
+		if step&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		step++
 		pos := len(d.out)
 		h := int(positionContexts[s.option][(pos-start)&mask])
 		state := d.state
@@ -299,6 +310,11 @@ func (d *decoder) decode(data []byte, s segment) error {
 		}
 		// PE VirtualAlloc zeros the dictionary: dist>=pos copies 0, not an error.
 		for i := 0; i < n; i++ {
+			if i&4095 == 0 {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+			}
 			p := len(d.out)
 			var b byte
 			if distance >= 0 && distance < p {

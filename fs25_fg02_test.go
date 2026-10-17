@@ -286,3 +286,44 @@ func TestFS25Fg02DumpAllMpzzBlocks(t *testing.T) {
 		t.Logf("block %d in=%d out=%d mag=%q flags=%02x -> %s", n, inSize, outSize, in[:min(5, len(in))], in[6], path)
 	}
 }
+
+func TestFS25Fg02InnerCRC(t *testing.T) {
+	skipHeavySolid(t)
+	src := corpus.OpenEnv(t, fs25Corpus)
+	vol, err := src.Open("fg-02.bin")
+	require.NoError(t, err)
+	test.CloseOnCleanup(t, vol)
+	st, err := vol.Stat()
+	require.NoError(t, err)
+	ra := vol.(interface {
+		ReadAt([]byte, int64) (int, error)
+	})
+	v, err := parseVolumeAt("fg-02.bin", ra, st.Size())
+	require.NoError(t, err)
+	var s *solid
+	for g := range groupSolids(v.Members) {
+		cp := g
+		s = &cp
+		break
+	}
+	require.NotNil(t, s)
+	require.Len(t, s.files, 1)
+	m := s.files[0]
+	require.Equal(t, "inner.fgpack", m.Path)
+	require.Equal(t, uint64(1073741824), m.Size)
+	require.Equal(t, uint32(0xf6c78ee7), m.CRC)
+	require.NotNil(t, m.crcTable)
+
+	var r io.Reader = io.NewSectionReader(ra, s.off, int64(s.csz))
+	for i := len(s.pipe) - 1; i >= 0; i-- {
+		dec, err := Decode(t.Context(), r, s.pipe[i])
+		require.NoError(t, err, s.pipe[i])
+		test.CloseOnCleanup(t, dec)
+		r = dec
+	}
+	h := crc32.New(m.crcTable)
+	n, err := io.Copy(h, r)
+	require.NoError(t, err)
+	require.Equal(t, int64(m.Size), n)
+	require.Equal(t, m.CRC, h.Sum32())
+}

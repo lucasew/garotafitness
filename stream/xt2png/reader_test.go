@@ -2,6 +2,8 @@ package xt2png
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"testing"
 
@@ -23,6 +25,12 @@ func TestFS25FirstChunkRestore(t *testing.T) {
 	r := &reader{ctx: t.Context(), hdr: h}
 	var got int
 	off := 0
+	wantSHA := []string{
+		"c8dc8082021c0cde2ce0cd8a75f4cc952da4d04c54c9068b0560287594d7b333",
+		"a68099ca9aacf11f41aafc7800a078405ff7e1a2bf59b21bdccde45be5e95251",
+		"5c4766be88d2f9fe992be9232bf5b0a4045469c29fb8605696c2a9f211825e2f",
+	}
+	wantLen := []int{28, 17, 23}
 	for i := 0; i < 3; i++ {
 		sh, err := xtl.ReadStreamHeader(bytes.NewReader(rest[i*18:]))
 		require.NoError(t, err)
@@ -33,6 +41,9 @@ func TestFS25FirstChunkRestore(t *testing.T) {
 		out, err := r.restore(sh, rawp, ext)
 		require.NoError(t, err)
 		require.Equal(t, sh.OldSize, int32(len(out)))
+		require.Equal(t, wantLen[i], len(out))
+		sum := sha256.Sum256(out)
+		require.Equal(t, wantSHA[i], hex.EncodeToString(sum[:]))
 		got += len(out)
 	}
 	require.Equal(t, 28+17+23, got)

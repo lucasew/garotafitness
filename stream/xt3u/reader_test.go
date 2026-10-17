@@ -39,14 +39,8 @@ func TestNewReaderTailOnly(t *testing.T) {
 
 func TestNewReaderLZ4HC(t *testing.T) {
 	t.Parallel()
-	if len(guestWASM) == 0 {
-		t.Skip("xt3udec.wasm not built")
-	}
 	raw := bytes.Repeat([]byte("Songs of Conquest "), 64)
-	g, err := openGuest(t.Context())
-	require.NoError(t, err)
-	test.CloseOnCleanup(t, g)
-	comp, err := g.compressHC(raw, 12, 0)
+	comp, err := compressHC(raw, 12, 0)
 	require.NoError(t, err)
 	opt := int32(1 | (12 << 3))
 	r, err := NewReader(t.Context(), bytes.NewReader(lz4hcSolid(raw, comp, opt)))
@@ -87,7 +81,7 @@ func afterMagic2SREP(t *testing.T) io.Reader {
 	f := corpus.FileEnv(t, "GAROTAFITNESS_CORPUS_SOC", "fg-03.bin")
 	_, err := f.Seek(31, io.SeekStart)
 	require.NoError(t, err)
-	m, err := magic2.NewReader(f)
+	m, err := magic2.NewReader(t.Context(), f)
 	require.NoError(t, err)
 	test.CloseOnCleanup(t, m)
 	s, err := srep.NewReader(t.Context(), m)
