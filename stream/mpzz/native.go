@@ -291,11 +291,6 @@ func (d *oggreDecoder) decodeStream(a *audioDecoder) ([]byte, error) {
 			}
 			return d.decodeAudioPages(a, out, 1)
 		}
-		if len(a.body.data) <= 4 {
-			d.lastPath += " destaudio"
-			a.setup = &config
-			return d.decodeDestCopy(a, nil, out, serial)
-		}
 	} else {
 		h, err = decodePageHeader(a.header, d.models, &d.probs[0x208], 0, 0)
 		if err != nil {
