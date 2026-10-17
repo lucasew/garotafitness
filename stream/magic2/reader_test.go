@@ -2,6 +2,7 @@ package magic2
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -20,7 +21,7 @@ func TestFG06(t *testing.T) {
 	data := make([]byte, 93116)
 	_, err = io.ReadFull(f, data)
 	require.NoError(t, err)
-	r, err := NewReader(bytes.NewReader(data))
+	r, err := NewReader(t.Context(), bytes.NewReader(data))
 	require.NoError(t, err)
 	test.CloseOnCleanup(t, r)
 	plain, err := io.ReadAll(r)
@@ -30,7 +31,7 @@ func TestFG06(t *testing.T) {
 	// Independent reconstruction: all five original archive CRCs match.
 	require.Equal(t, fg06SHA256, hex.EncodeToString(got[:]))
 	for _, n := range []int{9, 14, 51, 55, len(data) - 1} {
-		r, err := NewReader(bytes.NewReader(data[:n]))
+		r, err := NewReader(t.Context(), bytes.NewReader(data[:n]))
 		if err == nil {
 			_, err = io.Copy(io.Discard, r)
 			r.Close()
@@ -39,7 +40,7 @@ func TestFG06(t *testing.T) {
 	}
 	corrupt := bytes.Clone(data)
 	corrupt[55] ^= 0x80
-	r, err = NewReader(bytes.NewReader(corrupt))
+	r, err = NewReader(t.Context(), bytes.NewReader(corrupt))
 	if err == nil {
 		_, err = io.Copy(io.Discard, r)
 		r.Close()
@@ -48,3 +49,15 @@ func TestFG06(t *testing.T) {
 }
 
 const fg06SHA256 = "bc8242fbe8d79c30e3ccb08897f446ef95937c2ac5d5c38979182ba2a9417eab"
+
+func TestCanceled(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := NewReader(ctx, bytes.NewReader([]byte{0}))
+	require.ErrorIs(t, err, context.Canceled)
+
+	d := newDecoder(Header{})
+	err = d.decode(ctx, []byte{0, 0, 0, 0}, segment{option: 0, size: 1 << 20})
+	require.ErrorIs(t, err, context.Canceled)
+}

@@ -2,6 +2,7 @@
 package magic2
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -34,9 +35,12 @@ func putPacked(b []byte) {
 	packedPool.Put(&b)
 }
 
-func NewReader(src io.Reader) (io.ReadCloser, error) {
+func NewReader(ctx context.Context, src io.Reader) (io.ReadCloser, error) {
 	if src == nil {
 		return nil, errNil
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	h, err := ParseHeader(src)
 	if err != nil {
@@ -45,10 +49,11 @@ func NewReader(src io.Reader) (io.ReadCloser, error) {
 	if h.LongDistance || h.ROLZ || !h.Mixed || h.LiteralMode != 0 || h.ColorMode > 3 || h.AlphaMode > 4 || h.ImageMode != 0 {
 		return nil, fmt.Errorf("magic2: unsupported decoder options %+v", h)
 	}
-	return &reader{src: src, decoder: newDecoder(h)}, nil
+	return &reader{ctx: ctx, src: src, decoder: newDecoder(h)}, nil
 }
 
 type reader struct {
+	ctx      context.Context
 	src      io.Reader
 	decoder  *decoder
 	metadata *metadata
@@ -85,6 +90,9 @@ func read32(r io.Reader) (uint32, error) {
 	return binary.LittleEndian.Uint32(b[:]), err
 }
 func (r *reader) fill() error {
+	if err := r.ctx.Err(); err != nil {
+		return err
+	}
 	if r.metadata == nil {
 		var b [2]byte
 		if _, err := readRequired(r.src, b[:]); err != nil {
@@ -148,7 +156,7 @@ func (r *reader) fill() error {
 		return err
 	}
 	start := len(r.decoder.out)
-	if err := r.decoder.decode(data, s); err != nil {
+	if err := r.decoder.decode(r.ctx, data, s); err != nil {
 		if p := os.Getenv("MAGIC2_DUMP"); p != "" {
 			_ = os.WriteFile(p, data, 0o644)
 			_ = os.WriteFile(p+".meta", []byte(fmt.Sprintf("start=%d option=%d size=%d packed=%d aux=%d independent=%v workers=%d\n", start, s.option, s.size, s.packed, s.aux, r.decoder.header.Independent, r.decoder.header.Workers)), 0o644)
