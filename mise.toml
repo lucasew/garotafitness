@@ -4,7 +4,7 @@
 # conda:gxx, conda:clang, conda:emscripten). Do not use host g++, nix shell,
 # or registry clang. WASM guests use conda:emscripten (same pin as gameweb).
 [tools]
-go = "1.27.0"
+go = "1.27.3"
 goreleaser = "2.17.0"
 svu = "3.3.0"
 "conda:make" = "4.4.1"
