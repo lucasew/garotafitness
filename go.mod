@@ -5,7 +5,7 @@ go 1.27.0
 require (
 	github.com/lewtec/lewkit v0.0.0-20260921203713-979a8d59764b
 	github.com/stretchr/testify v1.12.1
-	github.com/ulikunitz/xz v0.5.16
+	github.com/ulikunitz/xz v0.5.17
 	golang.org/x/sync v0.23.0
 )
 
