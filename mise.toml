@@ -5,7 +5,7 @@
 # or registry clang. WASM guests use conda:emscripten (same pin as gameweb).
 [tools]
 go = "1.27.0"
-goreleaser = "2.17.0"
+goreleaser = "2.19.0"
 svu = "3.3.0"
 "conda:make" = "4.4.1"
 "conda:gxx" = "16.2.0"
