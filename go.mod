@@ -6,7 +6,7 @@ require (
 	github.com/lewtec/lewkit v0.0.0-20261026134556-0b80f61ca97e
 	github.com/stretchr/testify v1.12.1
 	github.com/ulikunitz/xz v0.5.17
-	golang.org/x/sync v0.23.0
+	golang.org/x/sync v0.25.0
 )
 
 require (
