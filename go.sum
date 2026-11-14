@@ -30,6 +30,8 @@ github.com/lewtec/lewkit v0.0.0-20261026134556-0b80f61ca97e h1:jkez1VOqnG6aEOgWf
 github.com/lewtec/lewkit v0.0.0-20261026134556-0b80f61ca97e/go.mod h1:n7dWIrZq9bIAtWJyGUc1Ifejx33KGULml1ExAmPaoUA=
 github.com/lewtec/lewkit v0.0.0-20261111212929-30e9db4e6248 h1:27Ps0sB0s7+zCiwLO0l5QoO7fqFRrifOMd3I96XkA0o=
 github.com/lewtec/lewkit v0.0.0-20261111212929-30e9db4e6248/go.mod h1:dm1tdazHZQMnjJnQ+Jz2yjJVSNrqRI+Agayn8S+eqrM=
+github.com/lewtec/lewkit v0.0.0-20261113130321-63440964a92d h1:j4BhL+eBuTk4BcjJ5AaDsbKg1RNSlRDexqsJm7DPGOQ=
+github.com/lewtec/lewkit v0.0.0-20261113130321-63440964a92d/go.mod h1:i3Ckmhjb9zRAfNPT3dPWqVQyQnAeOEaxYwb9zMxxb08=
 github.com/lucasb-eyer/go-colorful v1.4.0 h1:UtrWVfLdarDgc44HcS7pYloGHJUjHV/4FwW4TvVgFr4=
 github.com/lucasb-eyer/go-colorful v1.4.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/mattn/go-runewidth v0.0.30 h1:+KUuiDA4fF0R1p5FeueHefjDm+GIM+kWfFnDjybOPgk=
